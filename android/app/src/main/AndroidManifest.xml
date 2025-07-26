@@ -131,8 +131,7 @@
         <!-- GOOGLE MAPS API KEY -->
         <meta-data
             android:name="com.google.android.geo.API_KEY"
-            android:value="AIzaSyBdJmp8SVJTnDBgfYW8fXXErbW1HevZ2q4" />
-        <!--android:value="AIzaSyASYDjjiOaVCR2NqytWlOFvkucxMV4HL40" />-->
+            android:value="${google.maps.api.key}" />
 
 
     <!-- FOREGROUND SERVICE -->
