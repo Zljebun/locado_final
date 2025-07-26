@@ -1,6 +1,7 @@
 # Android sensitive files
 android/local.properties
 android/key.properties
+android/gradle.properties
 
 # Environment variables - API Keys and secrets
 .env
