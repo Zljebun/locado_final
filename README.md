@@ -592,3 +592,8 @@ homeMapScreen.focusOnTaskLocation(task)
 [![Dart](https://img.shields.io/badge/Language-Dart-blue?logo=dart)](https://dart.dev)
 
 </div>
+
+## 📚 Detailed Documentation
+
+- [🗺️ HomeMapScreen](docs/HomeMapScreen.md) - Map interface and geofencing
+- [🧭 MainNavigationScreen](docs/MainNavigationScreen.md) - Navigation hub and search system
