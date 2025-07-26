@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- LockScreenTaskActivity UI element IDs -->
+    <item name="task_title" type="id"/>
+    <item name="task_message" type="id"/>
+    <item name="view_task_button" type="id"/>
+    <item name="dismiss_button" type="id"/>
+    <item name="app_title" type="id"/>
+    <item name="task_icon" type="id"/>
+    <item name="button_layout" type="id"/>
+    <item name="main_card" type="id"/>
+</resources>

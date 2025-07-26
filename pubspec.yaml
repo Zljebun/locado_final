@@ -1,0 +1,53 @@
+name: locado_final
+description: "Location-based task reminder app"
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+  flutter: ">=3.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.6
+  flutter_dotenv: ^5.1.0
+  
+  # Location & Maps
+  google_maps_flutter: ^2.5.0
+  location: ^5.0.3
+  geolocator: ^10.1.0
+
+  # Database
+  sqflite: ^2.3.0
+  shared_preferences: ^2.2.2
+
+  # Notifications
+  flutter_local_notifications: ^17.0.0
+  permission_handler: ^11.3.1
+
+  provider: ^6.0.5
+
+  # File operations & sharing
+  share_plus: ^7.2.1
+  path_provider: ^2.1.2
+  file_picker: ^8.0.0+1
+
+  # Network
+  http: ^1.2.0
+
+  # Calendar & Timezone
+  timezone: ^0.9.2
+  device_calendar: ^4.3.3
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0
+
+flutter:
+  uses-material-design: true
+
+  assets:
+    - .env
