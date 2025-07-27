@@ -65,7 +65,7 @@ class _AILocationSearchScreenState extends State<AILocationSearchScreen> {
   LatLng? _currentLatLng; // DODANO - prave koordinate za AI
 
   static String get _openAIApiKey => dotenv.env['OPENAI_API_KEY'] ?? '';
-  static String get _googleMapsApiKey => dotenv.env['GOOGLE_MAPS_API_KEY'] ?? '';
+  static String get _googleMapsApiKey => dotenv.env['GOOGLE_MAPS_API_KEY_HTTP'] ?? '';
 
   @override
   void initState() {

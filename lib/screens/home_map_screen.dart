@@ -78,7 +78,7 @@ class _HomeMapScreenState extends State<HomeMapScreen>
 
   // Search functionality variables
   Set<Marker> _searchMarkers = {};
-  static String get googleApiKey => dotenv.env['GOOGLE_MAPS_API_KEY'] ?? '';
+  static String get googleApiKey => dotenv.env['GOOGLE_MAPS_API_KEY_ANDROID'] ?? '';
 
   bool _hasShownBatteryWarning = false;
   DateTime? _lastBatteryCheck;

@@ -91,11 +91,12 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
   bool _isLoadingSuggestions = false;
   Timer? _debounceTimer;
   FocusNode _searchFocusNode = FocusNode();
-  static String get googleApiKey => dotenv.env['GOOGLE_MAPS_API_KEY'] ?? '';
+  static String get googleApiKey => dotenv.env['GOOGLE_MAPS_API_KEY_HTTP'] ?? '';
 
   @override
   void initState() {
     super.initState();
+	print('🔑 DEBUG: HTTP API Key = ${dotenv.env['GOOGLE_MAPS_API_KEY_HTTP']}');
     _loadTaskData();
     _setupSearchListeners();
   }
@@ -205,7 +206,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
       // Build API URL with location bias
       String url = 'https://maps.googleapis.com/maps/api/place/autocomplete/json'
           '?input=${Uri.encodeComponent(query)}'
-          '&key=${dotenv.env['GOOGLE_MAPS_API_KEY'] ?? ''}'
+          '&key=${dotenv.env['GOOGLE_MAPS_API_KEY_HTTP'] ?? ''}'
           '&language=en';
 
       // Add location bias if available
