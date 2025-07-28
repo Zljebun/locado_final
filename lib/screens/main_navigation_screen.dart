@@ -21,6 +21,7 @@ import 'dart:math';
 import 'dart:async';
 import 'package:http/http.dart' as http;
 import 'package:flutter_dotenv/flutter_dotenv.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 // Helper class for task distance calculations
 class TaskWithDistance {
@@ -65,6 +66,7 @@ class MainNavigationScreen extends StatefulWidget {
 }
 
 class _MainNavigationScreenState extends State<MainNavigationScreen> {
+  String _currentMapProvider = 'Loading...';
   int _currentIndex = 0;
 
   // Search functionality
@@ -99,6 +101,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
 	print('🔑 DEBUG: HTTP API Key = ${dotenv.env['GOOGLE_MAPS_API_KEY_HTTP']}');
     _loadTaskData();
     _setupSearchListeners();
+	_loadMapProviderDisplay();
   }
 
   @override
@@ -975,6 +978,9 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
               );
             },
           ),
+		  
+		  //const SizedBox(height: 8),
+
         ],
       ),
     );
@@ -1493,4 +1499,123 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
       });
     }
   }
+  
+  // NEW METHODS for map provider setting
+Future<void> _loadMapProviderDisplay() async {
+  try {
+    final prefs = await SharedPreferences.getInstance();
+    final useOSM = prefs.getBool('use_openstreetmap') ?? false;
+    
+    setState(() {
+      _currentMapProvider = useOSM ? 'OpenStreetMap' : 'Google Maps';
+    });
+  } catch (e) {
+    setState(() {
+      _currentMapProvider = 'Google Maps';
+    });
+  }
+}
+
+void _showMapProviderDialog() {
+  showDialog(
+    context: context,
+    builder: (context) => AlertDialog(
+      title: const Row(
+        children: [
+          Icon(Icons.layers, color: Colors.blue),
+          SizedBox(width: 8),
+          Text('Choose Map Provider'),
+        ],
+      ),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('Select which map service to use in the app:'),
+          const SizedBox(height: 16),
+          
+          // Google Maps option
+          ListTile(
+            leading: const Icon(Icons.map, color: Colors.red),
+            title: const Text('Google Maps'),
+            subtitle: const Text('Satellite imagery, detailed POI data'),
+            trailing: _currentMapProvider == 'Google Maps' 
+                ? const Icon(Icons.check, color: Colors.green) 
+                : null,
+            onTap: () => _selectMapProvider('Google Maps'),
+          ),
+          
+          // OpenStreetMap option
+          ListTile(
+            leading: const Icon(Icons.layers, color: Colors.green),
+            title: const Text('OpenStreetMap'),
+            subtitle: const Text('Open source, no API costs'),
+            trailing: _currentMapProvider == 'OpenStreetMap' 
+                ? const Icon(Icons.check, color: Colors.green) 
+                : null,
+            onTap: () => _selectMapProvider('OpenStreetMap'),
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+      ],
+    ),
+  );
+}
+
+Future<void> _selectMapProvider(String provider) async {
+  try {
+    final prefs = await SharedPreferences.getInstance();
+    final useOSM = provider == 'OpenStreetMap';
+    
+    await prefs.setBool('use_openstreetmap', useOSM);
+    
+    setState(() {
+      _currentMapProvider = provider;
+    });
+    
+    Navigator.pop(context);
+    
+    // Show confirmation and restart hint
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Row(
+          children: [
+            Icon(
+              useOSM ? Icons.layers : Icons.map,
+              color: Colors.white,
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text('$provider selected! Go to Map tab to see changes.'),
+            ),
+          ],
+        ),
+        backgroundColor: Colors.green,
+        duration: const Duration(seconds: 4),
+        action: SnackBarAction(
+          label: 'Go to Map',
+          textColor: Colors.white,
+          onPressed: () {
+            setState(() {
+              _currentIndex = 0; // Switch to map tab
+            });
+          },
+        ),
+      ),
+    );
+    
+  } catch (e) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Error saving setting: $e'),
+        backgroundColor: Colors.red,
+      ),
+    );
+  }
+}
 }

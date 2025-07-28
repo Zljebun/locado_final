@@ -3,7 +3,9 @@ import 'dart:math';
 import 'dart:ui' as ui;
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
-import 'package:google_maps_flutter/google_maps_flutter.dart';
+import 'package:google_maps_flutter/google_maps_flutter.dart' as gmaps;
+import 'package:flutter_map/flutter_map.dart' as osm;
+import 'package:latlong2/latlong.dart' as ll;
 import 'package:locado_final/helpers/database_helper.dart';
 import 'package:locado_final/models/location_model.dart';
 import 'package:locado_final/models/task_location.dart';
@@ -34,8 +36,60 @@ import 'package:provider/provider.dart';
 import '../theme/theme_provider.dart';
 import 'ai_location_search_screen.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
+import '../widgets/osm_map_widget.dart';
 
-// HELPER KLASA za sortiranje task-ova po udaljenosti
+// Enum for map provider selection
+enum MapProvider { googleMaps, openStreetMap }
+
+// Universal coordinate class that works with both providers
+class UniversalLatLng {
+  final double latitude;
+  final double longitude;
+
+  UniversalLatLng(this.latitude, this.longitude);
+
+  // Convert to Google Maps LatLng
+  gmaps.LatLng toGoogleMaps() => gmaps.LatLng(latitude, longitude);
+  
+  // Convert to OpenStreetMap LatLng
+  ll.LatLng toOpenStreetMap() => ll.LatLng(latitude, longitude);
+
+  // Create from Google Maps LatLng
+  factory UniversalLatLng.fromGoogleMaps(gmaps.LatLng gLatLng) {
+    return UniversalLatLng(gLatLng.latitude, gLatLng.longitude);
+  }
+
+  // Create from OpenStreetMap LatLng
+  factory UniversalLatLng.fromOpenStreetMap(ll.LatLng osmLatLng) {
+    return UniversalLatLng(osmLatLng.latitude, osmLatLng.longitude);
+  }
+
+  @override
+  String toString() => 'UniversalLatLng($latitude, $longitude)';
+}
+
+// Universal marker class
+class UniversalMarker {
+  final String markerId;
+  final UniversalLatLng position;
+  final String? title;
+  final String? snippet;
+  final VoidCallback? onTap;
+  final gmaps.BitmapDescriptor? googleIcon;
+  final Widget? osmWidget;
+
+  UniversalMarker({
+    required this.markerId,
+    required this.position,
+    this.title,
+    this.snippet,
+    this.onTap,
+    this.googleIcon,
+    this.osmWidget,
+  });
+}
+
+// HELPER CLASS for task distance calculations (unchanged)
 class TaskWithDistance {
   final TaskLocation task;
   final double distance;
@@ -44,7 +98,7 @@ class TaskWithDistance {
 }
 
 class HomeMapScreen extends StatefulWidget {
-  final LatLng? selectedLocation;
+  final gmaps.LatLng? selectedLocation;
   const HomeMapScreen({Key? key, this.selectedLocation}) : super(key: key);
 
   @override
@@ -54,9 +108,19 @@ class HomeMapScreen extends StatefulWidget {
 class _HomeMapScreenState extends State<HomeMapScreen>
     with TickerProviderStateMixin, WidgetsBindingObserver, GeofencingScreenMixin {
 
-  late GoogleMapController _mapController;
-  Set<Marker> _markers = {};
-  LatLng? _currentLocation;
+  // Map provider selection
+  MapProvider _currentMapProvider = MapProvider.googleMaps;
+  
+  // Google Maps controllers and variables
+  gmaps.GoogleMapController? _googleMapController;
+  Set<gmaps.Marker> _googleMarkers = {};
+  
+  // OpenStreetMap controllers and variables  
+  osm.MapController? _osmMapController;
+  Set<OSMMarker> _osmMarkers = {};
+
+  // Universal variables (work with both providers)
+  UniversalLatLng? _currentLocation;
   bool _isLoading = true;
   int _notificationDistance = 100;
   final FlutterLocalNotificationsPlugin _flutterLocalNotificationsPlugin = FlutterLocalNotificationsPlugin();
@@ -76,8 +140,9 @@ class _HomeMapScreenState extends State<HomeMapScreen>
   StreamSubscription<Position>? _positionStream;
   bool _isTrackingLocation = false;
 
-  // Search functionality variables
-  Set<Marker> _searchMarkers = {};
+  // Search functionality variables (universal)
+  Set<gmaps.Marker> _googleSearchMarkers = {};
+  Set<OSMMarker> _osmSearchMarkers = {};
   static String get googleApiKey => dotenv.env['GOOGLE_MAPS_API_KEY_ANDROID'] ?? '';
 
   bool _hasShownBatteryWarning = false;
@@ -111,7 +176,7 @@ class _HomeMapScreenState extends State<HomeMapScreen>
   }
 
   void _setupImmediateUI() {
-    // SAMO stvari potrebne da UI radi ODMAH
+    // Setup things needed for immediate UI response
     WidgetsBinding.instance.addObserver(this);
     LocadoBackgroundService.setGeofenceEventListener(_handleGeofenceEvent);
 
@@ -120,7 +185,7 @@ class _HomeMapScreenState extends State<HomeMapScreen>
       duration: const Duration(seconds: 1),
     )..repeat(reverse: true);
 
-    // KRITIČNO - odmah ukloni loading spinner
+    // CRITICAL - remove loading spinner immediately
     setState(() {
       _isLoading = false;
     });
@@ -129,6 +194,7 @@ class _HomeMapScreenState extends State<HomeMapScreen>
   Future<void> _initializeEverythingAsync() async {
     try {
       final List<Future> parallelOperations = [
+        _loadMapProviderSetting(), // NEW: Load map provider preference
         _fastLoadBasicLocations(),
         _requestLocationPermission(),
         _requestNotificationPermission(),
@@ -147,10 +213,45 @@ class _HomeMapScreenState extends State<HomeMapScreen>
       _initializeGeofencingSystemFast();
 
     } catch (e) {
-      // Uklanjamo debugPrint u production
+      print('Initialization error: $e');
     }
   }
 
+  // NEW METHOD: Load map provider setting
+  Future<void> _loadMapProviderSetting() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final useOSM = prefs.getBool('use_openstreetmap') ?? false;
+      
+      setState(() {
+        _currentMapProvider = useOSM ? MapProvider.openStreetMap : MapProvider.googleMaps;
+      });
+
+      print('🗺️ HYBRID: Loaded map provider: ${_currentMapProvider.name}');
+    } catch (e) {
+      print('Error loading map provider setting: $e');
+      // Default to Google Maps on error
+      _currentMapProvider = MapProvider.googleMaps;
+    }
+  }
+
+  // NEW METHOD: Save map provider setting
+  Future<void> _saveMapProviderSetting(MapProvider provider) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool('use_openstreetmap', provider == MapProvider.openStreetMap);
+      
+      setState(() {
+        _currentMapProvider = provider;
+      });
+
+      print('🗺️ HYBRID: Saved map provider: ${provider.name}');
+    } catch (e) {
+      print('Error saving map provider setting: $e');
+    }
+  }
+
+  // CONTINUE WITH EXISTING METHODS (unchanged)...
   Future<void> _checkBatteryOptimizationSmart() async {
     try {
       // 1. Check timing - don't show too frequently
@@ -229,8 +330,6 @@ class _HomeMapScreenState extends State<HomeMapScreen>
       setState(() => _isBatteryLoading = false);
       debugPrint('Error checking battery optimization for FAB: $e');
     }
-
-
   }
 
   // Request battery optimization whitelist from FAB
@@ -602,9 +701,10 @@ class _HomeMapScreenState extends State<HomeMapScreen>
     );
   }
 
+  // HYBRID METHOD: Load basic locations for both providers
   Future<void> _fastLoadBasicLocations() async {
     try {
-      // PARALELNI database pozivi
+      // Parallel database calls
       final List<Future> dbOperations = [
         DatabaseHelper.instance.getAllLocations(),
         DatabaseHelper.instance.getAllTaskLocations(),
@@ -616,15 +716,17 @@ class _HomeMapScreenState extends State<HomeMapScreen>
 
       _savedLocations = taskLocations;
 
-      // OSNOVNI MARKERI PRVO - bez custom ikona (brže)
-      await _createBasicMarkers(locations, taskLocations);
+      // Create markers for current provider
+      if (_currentMapProvider == MapProvider.googleMaps) {
+        await _createGoogleMarkers(locations, taskLocations);
+        _upgradeGoogleMarkersLater(taskLocations);
+      } else {
+        await _createOSMMarkers(locations, taskLocations);
+      }
 
-      // CUSTOM MARKERI - kreiraj u background-u
-      _upgradeToCustomMarkersLater(taskLocations);
-
-      // GEOFENCING SYNC - samo ako je enabled
+      // GEOFENCING SYNC - only if enabled
       if (isGeofencingEnabled && _savedLocations.isNotEmpty) {
-        // Ne čekaj - pokreni u background-u
+        // Don't wait - run in background
         syncTaskLocationsFromScreen(_savedLocations);
       }
 
@@ -632,20 +734,21 @@ class _HomeMapScreenState extends State<HomeMapScreen>
       await _checkBatteryOptimizationForFAB();
 
     } catch (e) {
-      // Uklanjamo debugPrint u production
+      print('Error loading locations: $e');
     }
   }
 
-  Future<void> _createBasicMarkers(List<Location> locations, List<TaskLocation> taskLocations) async {
-    Set<Marker> newMarkers = {};
+  // GOOGLE MAPS: Create basic markers
+  Future<void> _createGoogleMarkers(List<Location> locations, List<TaskLocation> taskLocations) async {
+    Set<gmaps.Marker> newMarkers = {};
 
-    // Location markeri - isti kao pre
+    // Location markers
     for (var location in locations) {
       newMarkers.add(
-        Marker(
-          markerId: MarkerId('location_${location.id}'),
-          position: LatLng(location.latitude!, location.longitude!),
-          infoWindow: InfoWindow(
+        gmaps.Marker(
+          markerId: gmaps.MarkerId('location_${location.id}'),
+          position: gmaps.LatLng(location.latitude!, location.longitude!),
+          infoWindow: gmaps.InfoWindow(
             title: location.description ?? 'No Description',
             snippet: location.type ?? 'No Type',
           ),
@@ -653,1499 +756,1688 @@ class _HomeMapScreenState extends State<HomeMapScreen>
       );
     }
 
-    // Task markeri - OSNOVNI (default ikone za brzinu)
+    // Task markers - BASIC (default icons for speed)
     for (var task in taskLocations) {
       newMarkers.add(
-        Marker(
-          markerId: MarkerId('task_${task.id}'),
-          position: LatLng(task.latitude, task.longitude),
-          infoWindow: InfoWindow(title: task.title),
+        gmaps.Marker(
+          markerId: gmaps.MarkerId('task_${task.id}'),
+          position: gmaps.LatLng(task.latitude, task.longitude),
+          infoWindow: gmaps.InfoWindow(title: task.title),
           onTap: () => _handleTaskTap(task),
         ),
       );
     }
 
-    // Search markeri - dodaj ih u osnovne markere
-    newMarkers.addAll(_searchMarkers);
+    // Search markers - add them to basic markers
+    newMarkers.addAll(_googleSearchMarkers);
 
     setState(() {
-      _markers = newMarkers;
+      _googleMarkers = newMarkers;
     });
+
+    print('✅ HYBRID: Created ${newMarkers.length} Google markers');
   }
 
+  // OPENSTREETMAP: Create OSM markers
+  Future<void> _createOSMMarkers(List<Location> locations, List<TaskLocation> taskLocations) async {
+    Set<OSMMarker> newMarkers = {};
 
-  // Background upgrade - ne blokira UI
-  void _upgradeToCustomMarkersLater(List<TaskLocation> taskLocations) {
-    // Kratka pauza da se UI stabilizuje
+    // Location markers
+    for (var location in locations) {
+      newMarkers.add(
+        OSMMarker(
+          markerId: 'location_${location.id}',
+          position: ll.LatLng(location.latitude!, location.longitude!),
+          title: location.description ?? 'No Description',
+          child: OSMConverter.createDefaultMarker(color: Colors.blue),
+        ),
+      );
+    }
+
+    // Task markers
+    for (var task in taskLocations) {
+      final color = Color(int.parse(task.colorHex.replaceFirst('#', '0xff')));
+      
+      newMarkers.add(
+        OSMMarker(
+          markerId: 'task_${task.id}',
+          position: ll.LatLng(task.latitude, task.longitude),
+          title: task.title,
+          child: _createOSMCustomMarker(task.title, color),
+          onTap: () => _handleTaskTap(task),
+        ),
+      );
+    }
+
+    // Search markers
+    newMarkers.addAll(_osmSearchMarkers);
+
+    setState(() {
+      _osmMarkers = newMarkers;
+    });
+
+    print('✅ HYBRID: Created ${newMarkers.length} OSM markers');
+  }
+
+  // Create custom OSM marker widget
+  Widget _createOSMCustomMarker(String title, Color color) {
+    return Container(
+      width: 40,
+      height: 40,
+      decoration: BoxDecoration(
+        color: color,
+        shape: BoxShape.circle,
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.3),
+            blurRadius: 4,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: const Icon(
+        Icons.location_on,
+        color: Colors.white,
+        size: 20,
+      ),
+    );
+  }
+
+  // Background upgrade - Google Maps custom markers (unchanged logic)
+  void _upgradeGoogleMarkersLater(List<TaskLocation> taskLocations) {
+    // Short pause to let UI stabilize
     Future.delayed(Duration(milliseconds: 300), () async {
       try {
-        Set<Marker> updatedMarkers = Set.from(_markers);
+        Set<gmaps.Marker> updatedMarkers = Set.from(_googleMarkers);
 
-        // Kreiraj custom markere POSTUPNO - ne sve odjednom
+        // Create custom markers GRADUALLY - not all at once
         for (var task in taskLocations) {
           final color = Color(int.parse(task.colorHex.replaceFirst('#', '0xff')));
           final icon = await createCustomMarker(task.title, color);
 
-          // Zameni basic marker sa custom
+          // Replace basic marker with custom
           updatedMarkers.removeWhere((marker) =>
           marker.markerId.value == 'task_${task.id}');
 
           updatedMarkers.add(
-            Marker(
-              markerId: MarkerId('task_${task.id}'),
-              position: LatLng(task.latitude, task.longitude),
+            gmaps.Marker(
+              markerId: gmaps.MarkerId('task_${task.id}'),
+              position: gmaps.LatLng(task.latitude, task.longitude),
               icon: icon,
-              infoWindow: InfoWindow(title: task.title),
-              onTap: () => _handleTaskTap(task), // ISTA funkcionalnost
-            ),
-          );
-
-          // Update UI postepeno
-          if (mounted) {
-            setState(() {
-              _markers = updatedMarkers;
-            });
-          }
-
-          // Kratka pauza između markera
-          await Future.delayed(Duration(milliseconds: 50));
-        }
-      } catch (e) {
-        // Uklanjamo debugPrint u production
-      }
-    });
-  }
-
-  Future<void> _handleTaskTap(TaskLocation task) async {
-    final result = await Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (ctx) => TaskDetailScreen(taskLocation: task),
-      ),
-    );
-
-    if (result != null) {
-      if (result == true) {
-        await _loadSavedLocationsWithRefresh();
-      } else if (result is Map) {
-        if (result['refresh'] == true) {
-          await _loadSavedLocationsWithRefresh();
-          if (result['focusLocation'] != null) {
-            await _focusOnNewLocation(result['focusLocation'] as LatLng);
-          }
-        } else if (result['action'] == 'openLocationSearchForEdit') {
-          // User wants to search for location from TaskDetail
-
-          // RESET previous state first
-          _pendingTaskState = null;
-          _isSearchingForTaskInput = false;
-
-          // Set new state
-          _pendingTaskState = result['taskState'];
-          _isSearchingForTaskInput = true;
-
-          // Open search mode
-          setState(() {
-
-          });
-
-          // Show helpful message
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Search for a new location to update your task'),
-              backgroundColor: Colors.blue,
-              duration: Duration(seconds: 3),
-            ),
-          );
-        }
-      }
-    }
-  }
-
-  // OPTIMIZOVANA geofencing inicijalizacija
-  void _initializeGeofencingSystemFast() {
-    // POKRENI U BACKGROUND-U - ne čekaj
-    Future.delayed(Duration(milliseconds: 500), () async {
-      try {
-        // GEOFENCING INITIALIZATION - ista logika, ali BEZ dugih delay-a
-        initializeScreenGeofencing(
-          onGeofenceEvent: _handleGeofenceEvent,
-        );
-
-        final helper = GeofencingIntegrationHelper.instance;
-
-        if (!helper.isInitialized) {
-          final initialized = await helper.initializeGeofencing(
-            autoStartService: true,
-            onGeofenceEvent: _handleGeofenceEvent,
-          );
-
-          if (initialized) {
-            // LOAD EXISTING TASKS - optimizovana verzija (već uklonili delay-e)
-            await helper.initializeExistingTasks();
-          }
-        }
-
-      } catch (e) {
-        // Uklanjamo debugPrint u production
-      }
-    });
-  }
-
-  Future<void> _initializePreviousTaskCount() async {
-    final taskLocations = await DatabaseHelper.instance.getAllTaskLocations();
-    _previousTaskCount = taskLocations.length;
-  }
-
-  Future<void> _checkForTaskDetailFromNotification() async {
-    try {
-      const platform = MethodChannel('com.example.locado_final/task_detail');
-      final result = await platform.invokeMethod('checkPendingTaskDetail');
-
-      if (result != null && result['hasTaskDetail'] == true) {
-        final taskId = result['taskId'] as String;
-        final taskTitle = result['taskTitle'] as String;
-        final fromNotification = result['fromNotification'] as bool;
-
-        // Load task from database and navigate
-        await _navigateToTaskDetail(taskId, taskTitle);
-      }
-    } catch (e) {
-      // Uklanjamo debugPrint u production
-    }
-  }
-
-  Future<void> _navigateToTaskDetail(String taskId, String taskTitle) async {
-    try {
-      // Find task in database
-      final taskLocations = await DatabaseHelper.instance.getAllTaskLocations();
-      final task = taskLocations.firstWhere(
-            (task) => task.id.toString() == taskId,
-        orElse: () => throw Exception('Task not found'),
-      );
-
-      // Navigate to TaskDetailScreen
-      final result = await Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (ctx) => TaskDetailScreen(taskLocation: task),
-        ),
-      );
-
-      // Handle result
-      if (result != null) {
-        if (result == true) {
-          await _loadSavedLocationsWithRefresh();
-        } else if (result is Map && result['refresh'] == true) {
-          await _loadSavedLocationsWithRefresh();
-          if (result['focusLocation'] != null) {
-            await _focusOnNewLocation(result['focusLocation'] as LatLng);
-          }
-        }
-      }
-
-    } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Error opening task: $e'),
-          backgroundColor: Colors.red,
-        ),
-      );
-    }
-  }
-
-  Future<void> _showViberStyleAlert(GeofenceEvent event) async {
-    try {
-      await platformLockScreen.invokeMethod('showLockScreenAlert', {
-        'taskTitle': event.title ?? 'Task Location',
-        'taskMessage': 'You are near: ${event.title ?? "a task location"}',
-        'taskId': event.taskId ?? 'unknown',
-      });
-    } catch (e) {
-      // Fallback na postojeću metodu
-      await _showRegularWakeNotification(event);
-    }
-  }
-
-  @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    super.didChangeAppLifecycleState(state);
-
-    switch (state) {
-      case AppLifecycleState.resumed:
-        _isAppInForeground = true;
-        if (_autoFocusEnabled) {
-          _startLocationTracking();
-        }
-        break;
-      case AppLifecycleState.paused:
-      case AppLifecycleState.inactive:
-      case AppLifecycleState.detached:
-        _isAppInForeground = false;
-        break;
-      case AppLifecycleState.hidden:
-        break;
-    }
-  }
-
-  Future<void> _initializeNotifications() async {
-    const AndroidInitializationSettings initializationSettingsAndroid =
-    AndroidInitializationSettings('@mipmap/ic_launcher');
-    final InitializationSettings initializationSettings =
-    InitializationSettings(android: initializationSettingsAndroid);
-    await _flutterLocalNotificationsPlugin.initialize(initializationSettings,
-      onDidReceiveNotificationResponse: _onNotificationTapped,);
-
-    // Main location notification channel
-    const AndroidNotificationChannel locationChannel = AndroidNotificationChannel(
-      'location_channel',
-      'Location Notifications',
-      description: 'Smart geofencing notifications',
-      importance: Importance.max,
-      enableVibration: true,
-      playSound: true,
-      showBadge: true,
-      enableLights: true,
-      ledColor: const Color.fromARGB(255, 255, 0, 0),
-    );
-
-    const AndroidNotificationChannel wakeChannel = AndroidNotificationChannel(
-      'geofence_wake_channel',
-      'Geofence Wake Alerts',
-      description: 'Location alerts that wake the screen',
-      importance: Importance.max,
-      enableVibration: true,
-      playSound: true,
-      showBadge: true,
-      enableLights: true,
-      ledColor: const Color.fromARGB(255, 0, 255, 0),
-    );
-
-    const AndroidNotificationChannel testChannel = AndroidNotificationChannel(
-      'test_channel',
-      'Test Notifications',
-      description: 'For testing notification settings',
-      importance: Importance.max,
-      enableVibration: true,
-      playSound: true,
-    );
-
-    final androidPlugin = _flutterLocalNotificationsPlugin
-        .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>();
-
-    if (androidPlugin != null) {
-      await androidPlugin.createNotificationChannel(locationChannel);
-      await androidPlugin.createNotificationChannel(testChannel);
-      await androidPlugin.createNotificationChannel(wakeChannel);
-    }
-  }
-
-  Future<void> _requestNotificationPermission() async {
-    final status = await Permission.notification.status;
-    if (!status.isGranted) {
-      await Permission.notification.request();
-    }
-  }
-
-  Future<void> _loadSettings() async {
-    final prefs = await SharedPreferences.getInstance();
-    final distance = prefs.getInt('notification_distance') ?? 100;
-    final autoFocus = prefs.getBool('auto_focus_enabled') ?? true; // ✅ DODANO
-
-    setState(() {
-      _notificationDistance = distance;
-      _autoFocusEnabled = autoFocus; // ✅ DODANO
-    });
-
-    final lastWarningStr = prefs.getString('last_battery_warning');
-    if (lastWarningStr != null) {
-      _lastBatteryCheck = DateTime.parse(lastWarningStr);
-      print('🔋 Loaded last battery warning: $_lastBatteryCheck');
-    }
-
-    // ✅ POKRENI/ZAUSTAVI LOCATION TRACKING PREMA POSTAVCI
-    if (_autoFocusEnabled) {
-      _startLocationTracking();
-    } else {
-      _stopLocationTracking();
-    }
-  }
-
-  Future<BitmapDescriptor> createCustomMarker(String title, Color color) async {
-    final ui.PictureRecorder recorder = ui.PictureRecorder();
-    final Canvas canvas = Canvas(recorder);
-    const double size = 150.0;
-
-    final Paint shadowPaint = Paint()
-      ..color = Colors.black.withOpacity(0.25)
-      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 10);
-
-    final Paint markerPaint = Paint()..color = color;
-    canvas.drawCircle(const Offset(size / 2 + 2, size / 2 - 8), size / 2 - 10, shadowPaint);
-    canvas.drawCircle(const Offset(size / 2, size / 2 - 10), size / 2 - 10, markerPaint);
-
-    final Path triangle = Path();
-    triangle.moveTo(size / 2 - 25, size / 2 + 10);
-    triangle.lineTo(size / 2 + 25, size / 2 + 10);
-    triangle.lineTo(size / 2, size + 30);
-    triangle.close();
-    canvas.drawPath(triangle, markerPaint);
-
-    final TextPainter textPainter = TextPainter(textDirection: TextDirection.ltr);
-    String shortTitle = title.length > 10 ? '${title.substring(0, 10)}...' : title;
-    textPainter.text = TextSpan(
-      text: shortTitle,
-      style: const TextStyle(fontSize: 24, color: Colors.white, fontWeight: FontWeight.bold),
-    );
-    textPainter.layout();
-    textPainter.paint(canvas, Offset((size - textPainter.width) / 2, (size / 2 - 10 - textPainter.height / 2)));
-
-    final img = await recorder.endRecording().toImage(size.toInt(), (size + 30).toInt());
-    final byteData = await img.toByteData(format: ui.ImageByteFormat.png);
-    return BitmapDescriptor.fromBytes(byteData!.buffer.asUint8List());
-  }
-
-  double _calculateDistance(double lat1, double lon1, double lat2, double lon2) {
-    const earthRadius = 6371000;
-    final dLat = _degreesToRadians(lat2 - lat1);
-    final dLon = _degreesToRadians(lon2 - lon1);
-    final a = (sin(dLat / 2) * sin(dLat / 2)) +
-        cos(_degreesToRadians(lat1)) * cos(_degreesToRadians(lat2)) *
-            (sin(dLon / 2) * sin(dLon / 2));
-    final c = 2 * atan2(sqrt(a), sqrt(1 - a));
-    return earthRadius * c;
-  }
-
-  double _degreesToRadians(double degrees) {
-    return degrees * pi / 180;
-  }
-
-  String _formatDistance(double distanceInMeters) {
-    // Proveri da li uređaj koristi imperijalne jedinice (SAD, UK, Burma)
-    final locale = WidgetsBinding.instance.platformDispatcher.locale;
-    final useImperialUnits = ['US', 'GB', 'MM'].contains(locale.countryCode);
-
-    if (useImperialUnits) {
-      // Konvertuj u milje (1 metar = 0.000621371 milja)
-      final miles = distanceInMeters * 0.000621371;
-      if (miles < 0.1) {
-        final feet = distanceInMeters * 3.28084; // Konvertuj u stope
-        return '${feet.round()} ft';
-      } else {
-        return '${miles.toStringAsFixed(1)} mi';
-      }
-    } else {
-      // Koristi metrički sistem
-      if (distanceInMeters < 1000) {
-        return '${distanceInMeters.round()} m';
-      } else {
-        final kilometers = distanceInMeters / 1000;
-        return '${kilometers.toStringAsFixed(1)} km';
-      }
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    print('🎨 BUILD DEBUG: brightness = ${Theme.of(context).brightness}');
-    print('🎨 BUILD DEBUG: cardColor = ${Theme.of(context).cardColor}');
-    print('🎨 BUILD DEBUG: primaryColor = ${Theme.of(context).primaryColor}');
-    print('🎨 BUILD DEBUG: scaffoldBackgroundColor = ${Theme.of(context).scaffoldBackgroundColor}');
-
-    return Scaffold(
-      body: Stack(
-        children: [
-          GoogleMap(
-            onMapCreated: (controller) {
-              _mapController = controller;
-              _isMapReady = true;
-            },
-            initialCameraPosition: CameraPosition(
-              target: widget.selectedLocation ?? LatLng(48.2082, 16.3738),
-              zoom: 15,
-            ),
-            markers: _markers,
-            myLocationEnabled: true,
-            myLocationButtonEnabled: true,
-            onLongPress: (LatLng position) async {
-              final result = await Navigator.push(
-                context,
-                MaterialPageRoute(builder: (ctx) => TaskInputScreen(location: position)),
-              );
-              if (result == true) {
-                _fastLoadBasicLocations();
-              }
-            },
-            onTap: (LatLng location) {
-              // Clear search results when tapping on map
-              if (_searchMarkers.isNotEmpty) {
-                setState(() {
-                  _searchMarkers.clear();
-                });
-                _updateMapWithSearchResults();
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('Search results cleared'),
-                    backgroundColor: Colors.blue,
-                    duration: Duration(seconds: 2),
-                  ),
-                );
-              } else {
-                _centerCameraOnLocation(location);
-              }
-            },
-          ),
-          AnimatedBuilder(
-            animation: _pulseController,
-            builder: (context, child) {
-              return Stack(
-                children: _nearbyTasks.map((task) {
-                  final animation = Tween(begin: 20.0, end: 40.0).animate(_pulseController);
-                  return FutureBuilder<ScreenCoordinate>(
-                    future: _mapController.getScreenCoordinate(LatLng(task.latitude, task.longitude)),
-                    builder: (context, snapshot) {
-                      if (!snapshot.hasData) return const SizedBox.shrink();
-                      final screenPoint = snapshot.data!;
-                      return Positioned(
-                        left: screenPoint.x.toDouble() - animation.value / 2,
-                        top: screenPoint.y.toDouble() - animation.value / 2,
-                        child: GestureDetector(
-                          onTap: () async {
-                            final result = await Navigator.push(
-                              context,
-                              MaterialPageRoute(builder: (ctx) => TaskDetailScreen(taskLocation: task)),
-                            );
-                            if (result == true) {
-                              _fastLoadBasicLocations();
-                            }
-                          },
-                          child: Column(
-                            children: [
-                              Container(
-                                width: animation.value,
-                                height: animation.value,
-                                decoration: BoxDecoration(
-                                  shape: BoxShape.circle,
-                                  color: Colors.teal.withOpacity(0.3),
-                                ),
-                              ),
-                              const SizedBox(height: 4),
-                              Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                                decoration: BoxDecoration(
-                                  color: Colors.white,
-                                  borderRadius: BorderRadius.circular(4),
-                                  boxShadow: [BoxShadow(color: Colors.black12, blurRadius: 2)],
-                                ),
-                                child: Text(
-                                  task.title,
-                                  style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold),
-                                ),
-                              )
-                            ],
-                          ),
-                        ),
-                      );
-                    },
-                  );
-                }).toList(),
-              );
-            },
-          ),
-          if (_isLoading)
-            const Center(child: CircularProgressIndicator()),
-
-        ],
-      ),
-
-      // Battery Optimization FAB
-      floatingActionButton: _showBatteryFAB ? FloatingActionButton(
-        onPressed: _showBatteryOptimizationDialog,
-        backgroundColor: Colors.orange,
-        foregroundColor: Colors.white,
-        child: const Icon(Icons.battery_alert, size: 28),
-        elevation: 6,
-        heroTag: "battery_fab",
-      ) : null,
-
-      //floatingActionButtonLocation: FloatingActionButtonLocation.startTop,
-      //floatingActionButtonLocation: FloatingActionButtonLocation.startFloat,
-      //floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
-      floatingActionButtonLocation: FloatingActionButtonLocation.startTop,
-    );
-  }
-
-  Future<void> _loadSavedLocationsAndFocusNew() async {
-    try {
-      List<Location> locations = await DatabaseHelper.instance.getAllLocations();
-      List<TaskLocation> taskLocations = await DatabaseHelper.instance.getAllTaskLocations();
-
-      // Pronađi novi task (poslednji u listi)
-      TaskLocation? newTask;
-      if (taskLocations.isNotEmpty) {
-        if (_savedLocations.length < taskLocations.length) {
-          // Ima novi task
-          newTask = taskLocations.last;
-          _lastAddedTask = newTask;
-        }
-      }
-
-      _savedLocations = taskLocations;
-
-      Set<Marker> newMarkers = {};
-
-      // Dodaj location markere
-      for (var location in locations) {
-        newMarkers.add(
-          Marker(
-            markerId: MarkerId('location_${location.id}'),
-            position: LatLng(location.latitude!, location.longitude!),
-            infoWindow: InfoWindow(
-              title: location.description ?? 'No Description',
-              snippet: location.type ?? 'No Type',
-            ),
-          ),
-        );
-      }
-
-      // Dodaj task markere
-      for (var task in taskLocations) {
-        final color = Color(int.parse(task.colorHex.replaceFirst('#', '0xff')));
-        final icon = await createCustomMarker(task.title, color);
-
-        newMarkers.add(
-          Marker(
-            markerId: MarkerId('task_${task.id}'),
-            position: LatLng(task.latitude, task.longitude),
-            icon: icon,
-            infoWindow: InfoWindow(title: task.title),
-            onTap: () async {
-              final result = await Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (ctx) => TaskDetailScreen(taskLocation: task),
-                ),
-              );
-
-              if (result != null) {
-                if (result == true) {
-                  // Obični refresh bez fokusiranja
-                  await _loadSavedLocationsWithRefresh();
-                } else if (result is Map && result['refresh'] == true) {
-                  // Refresh sa fokusiranjem na novu lokaciju
-                  await _loadSavedLocationsWithRefresh();
-
-                  if (result['focusLocation'] != null) {
-                    await _focusOnNewLocation(result['focusLocation'] as LatLng);
-                  }
-                }
-              }
-            },
-          ),
-        );
-      }
-
-      setState(() {
-        _markers = newMarkers;
-        _isLoading = false;
-      });
-
-      // FOKUS NA NOVU LOKACIJU
-      if (newTask != null && _mapController != null) {
-        await _focusOnNewTask(newTask);
-      }
-
-      // Geofencing sync
-      if (isGeofencingEnabled && _savedLocations.isNotEmpty) {
-        await syncTaskLocationsFromScreen(_savedLocations);
-      }
-    } catch (e) {
-      setState(() {
-        _isLoading = false;
-      });
-    }
-  }
-
-  // Nova metoda za fokus na task:
-  Future<void> _focusOnNewTask(TaskLocation task) async {
-    try {
-      // Animate camera to new task location
-      await _mapController!.animateCamera(
-        CameraUpdate.newCameraPosition(
-          CameraPosition(
-            target: LatLng(task.latitude, task.longitude),
-            zoom: 17.0, // Close zoom level to see the task clearly
-            bearing: 0,
-            tilt: 0,
-          ),
-        ),
-      );
-    } catch (e) {
-      // Uklanjamo debugPrint u production
-    }
-  }
-
-  void _centerCameraOnLocation(LatLng location) {
-    if (_mapController != null) {
-      _mapController!.animateCamera(
-        CameraUpdate.newCameraPosition(
-          CameraPosition(
-            target: location,
-            zoom: 17,
-            bearing: 0,
-            tilt: 0,
-          ),
-        ),
-      );
-    }
-  }
-
-  // GEOFENCING EVENT HANDLER
-  void _handleGeofenceEvent(GeofenceEvent event) {
-    if (event.eventType == GeofenceEventType.enter && mounted) {
-      _showViberStyleAlert(event);
-    }
-  }
-
-  Future<void> _showRegularWakeNotification(GeofenceEvent event) async {
-    try {
-      await _createWakeScreenNotificationChannel();
-
-      final androidDetails = AndroidNotificationDetails(
-        'geofence_wake_channel',
-        'Geofence Wake Alerts',
-        channelDescription: 'Location alerts that wake the screen',
-        importance: Importance.max,
-        priority: Priority.max,
-        fullScreenIntent: true,
-        category: AndroidNotificationCategory.alarm,
-        visibility: NotificationVisibility.public,
-        showWhen: true,
-        when: DateTime.now().millisecondsSinceEpoch,
-        autoCancel: true,
-        enableLights: true,
-        ledColor: const Color.fromARGB(255, 0, 255, 0),
-        ledOnMs: 1000,
-        ledOffMs: 500,
-        enableVibration: true,
-        vibrationPattern: Int64List.fromList([0, 1000, 500, 1000]),
-        playSound: true,
-        sound: const RawResourceAndroidNotificationSound('notification'),
-        color: const Color.fromARGB(255, 0, 255, 0),
-        colorized: true,
-        timeoutAfter: 20000,
-        largeIcon: const DrawableResourceAndroidBitmap('@mipmap/ic_launcher'),
-      );
-
-      final platformDetails = NotificationDetails(android: androidDetails);
-      final notificationId = DateTime.now().millisecondsSinceEpoch ~/ 1000;
-
-      await _flutterLocalNotificationsPlugin.show(
-        notificationId,
-        '🚨 LOCADO ALERT 🚨',
-        'You are near: ${event.title ?? "a task location"}',
-        platformDetails,
-        payload: jsonEncode({
-          'type': 'fullscreen_geofence',
-          'taskId': event.taskId,
-          'taskTitle': event.title,
-          'geofenceId': event.geofenceId,
-        }),
-      );
-    } catch (e) {
-      // Uklanjamo debugPrint u production
-    }
-  }
-
-  Future<void> _createWakeScreenNotificationChannel() async {
-    const AndroidNotificationChannel wakeChannel = AndroidNotificationChannel(
-      'geofence_wake_channel',
-      'Geofence Wake Alerts',
-      description: 'Location alerts that wake the screen and appear on lock screen',
-      importance: Importance.max,
-      enableVibration: true,
-      playSound: true,
-      showBadge: true,
-      enableLights: true,
-      ledColor: const Color.fromARGB(255, 0, 255, 0),
-    );
-
-    final androidPlugin = _flutterLocalNotificationsPlugin
-        .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>();
-
-    if (androidPlugin != null) {
-      await androidPlugin.createNotificationChannel(wakeChannel);
-    }
-  }
-
-  Future<void> _requestLocationPermission() async {
-    final whenInUseStatus = await Permission.locationWhenInUse.status;
-    if (!whenInUseStatus.isGranted) {
-      await Permission.locationWhenInUse.request();
-    }
-
-    final backgroundStatus = await Permission.locationAlways.status;
-    if (!backgroundStatus.isGranted) {
-      await Permission.locationAlways.request();
-    }
-  }
-
-  // NOVA METODA ZA OSVEŽAVANJE SA FOKUSIRANJEM
-  Future<void> _loadSavedLocationsWithRefresh() async {
-    try {
-      List<Location> locations = await DatabaseHelper.instance.getAllLocations();
-      List<TaskLocation> taskLocations = await DatabaseHelper.instance.getAllTaskLocations();
-      _savedLocations = taskLocations;
-
-      Set<Marker> newMarkers = {};
-
-      // Dodaj location markere
-      for (var location in locations) {
-        newMarkers.add(
-          Marker(
-            markerId: MarkerId('location_${location.id}'),
-            position: LatLng(location.latitude!, location.longitude!),
-            infoWindow: InfoWindow(
-              title: location.description ?? 'No Description',
-              snippet: location.type ?? 'No Type',
-            ),
-          ),
-        );
-      }
-
-      // Dodaj task markere sa novim pozicijama
-      for (var task in taskLocations) {
-        final color = Color(int.parse(task.colorHex.replaceFirst('#', '0xff')));
-        final icon = await createCustomMarker(task.title, color);
-
-        newMarkers.add(
-          Marker(
-            markerId: MarkerId('task_${task.id}'),
-            position: LatLng(task.latitude, task.longitude),
-            icon: icon,
-            infoWindow: InfoWindow(title: task.title),
-            onTap: () async {
-              final result = await Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (ctx) => TaskDetailScreen(taskLocation: task),
-                ),
-              );
-
-              if (result != null) {
-                if (result == true) {
-                  // Obični refresh bez fokusiranja
-                  await _loadSavedLocationsWithRefresh();
-                } else if (result is Map && result['refresh'] == true) {
-                  // Refresh sa fokusiranjem na novu lokaciju
-                  await _loadSavedLocationsWithRefresh();
-
-                  if (result['focusLocation'] != null) {
-                    await _focusOnNewLocation(result['focusLocation'] as LatLng);
-                  }
-                }
-              }
-            },
-          ),
-        );
-      }
-
-      setState(() {
-        _markers = newMarkers;
-        _isLoading = false;
-      });
-
-      // GEOFENCING AUTO-SYNC
-      if (isGeofencingEnabled && _savedLocations.isNotEmpty) {
-        await syncTaskLocationsFromScreen(_savedLocations);
-      }
-
-    } catch (e) {
-      setState(() {
-        _isLoading = false;
-      });
-    }
-  }
-
-  // DODATNO - METODA ZA FOKUSIRANJE NA PROMENJEN TASK
-  Future<void> _focusOnUpdatedTask(int taskId) async {
-    try {
-      final updatedTask = _savedLocations.firstWhere((task) => task.id == taskId);
-
-      if (_mapController != null) {
-        await _mapController!.animateCamera(
-          CameraUpdate.newCameraPosition(
-            CameraPosition(
-              target: LatLng(updatedTask.latitude, updatedTask.longitude),
-              zoom: 17.0,
-              bearing: 0,
-              tilt: 0,
-            ),
-          ),
-        );
-      }
-    } catch (e) {
-      // Uklanjamo debugPrint u production
-    }
-  }
-
-  void _onNotificationTapped(NotificationResponse notificationResponse) {
-    final payload = notificationResponse.payload;
-
-    if (payload != null && payload.startsWith('geofence_')) {
-      final geofenceId = payload.replaceFirst('geofence_', '');
-      // TODO: Implementiraj navigaciju do task detail screen-a
-    }
-  }
-
-  Future<void> _returnToTaskInputWithLocation(LatLng selectedLocation, String locationName) async {
-    if (_pendingTaskState == null) return;
-
-    // Clear search state
-    setState(() {
-      _searchMarkers.clear();
-      _isSearchingForTaskInput = false;
-    });
-    await _updateMapWithSearchResults();
-
-    // Navigate to TaskInputScreen with restored state and new location
-    final result = await Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (ctx) => TaskInputScreenWithState(
-          originalLocation: LatLng(
-            _pendingTaskState!['originalLocation']['latitude'],
-            _pendingTaskState!['originalLocation']['longitude'],
-          ),
-          selectedLocation: selectedLocation,
-          selectedLocationName: locationName,
-          savedState: _pendingTaskState!,
-        ),
-      ),
-    );
-
-    // Clear pending state
-    _pendingTaskState = null;
-
-    // Handle result
-    if (result == true) {
-      await _loadSavedLocationsAndFocusNew();
-    }
-  }
-
-  // NOVA METODA ZA FOKUSIRANJE NA NOVU LOKACIJU
-  Future<void> _focusOnNewLocation(LatLng newLocation) async {
-    try {
-      if (_mapController != null) {
-        await _mapController!.animateCamera(
-          CameraUpdate.newCameraPosition(
-            CameraPosition(
-              target: newLocation,
-              zoom: 17.0, // Close zoom to see the new location clearly
-              bearing: 0,
-              tilt: 0,
-            ),
-          ),
-        );
-      }
-    } catch (e) {
-      // Uklanjamo debugPrint u production
-    }
-  }
-
-// Replace the _sortTasksByDistanceWithDetails method with this optimized version:
-
-  /// Optimizovana verzija - koristi cached lokaciju (MNOGO BRŽE!)
-  Future<List<TaskWithDistance>> _sortTasksByDistanceWithDetails(List<TaskLocation> tasks) async {
-    print('🔍 SORT DEBUG: Pokrećem sortiranje za ${tasks.length} taskova');
-
-    // UVEK dobij fresh lokaciju - korisnik se kreće!
-    print('🔍 SORT DEBUG: Dobijam fresh lokaciju...');
-    final apiPosition = await LocationService.getCurrentLocation();
-    print('🔍 SORT DEBUG: Fresh lokacija = $apiPosition');
-
-    if (apiPosition == null) {
-      print('❌ SORT DEBUG: Nema fresh lokacije! Vraćam sve sa 0.0 distance');
-      return tasks.map((task) => TaskWithDistance(task, 0.0)).toList();
-    }
-
-    final currentPosition = LatLng(apiPosition.latitude, apiPosition.longitude);
-    print('✅ SORT DEBUG: Koristim fresh lokaciju (lat: ${currentPosition.latitude}, lng: ${currentPosition.longitude})');
-
-    // Koristi fresh lokaciju za kalkulacije
-    List<TaskWithDistance> tasksWithDistance = [];
-
-    for (int i = 0; i < tasks.length && i < 3; i++) {  // Debug samo prva 3 taska
-      final task = tasks[i];
-      final distance = _calculateDistance(
-        currentPosition.latitude,
-        currentPosition.longitude,
-        task.latitude,
-        task.longitude,
-      );
-
-      print('🔍 SORT DEBUG: Task "${task.title}" (lat: ${task.latitude}, lng: ${task.longitude}) -> Distance = ${distance}m');
-      tasksWithDistance.add(TaskWithDistance(task, distance));
-    }
-
-    // Dodaj ostatak taskova bez debug-a
-    for (int i = 3; i < tasks.length; i++) {
-      final task = tasks[i];
-      final distance = _calculateDistance(
-        currentPosition.latitude,
-        currentPosition.longitude,
-        task.latitude,
-        task.longitude,
-      );
-      tasksWithDistance.add(TaskWithDistance(task, distance));
-    }
-
-    tasksWithDistance.sort((a, b) => a.distance.compareTo(b.distance));
-    print('✅ SORT DEBUG: Sortiranje završeno, prvi task = ${tasksWithDistance.first.distance}m');
-    return tasksWithDistance;
-  }
-
-
-
-
-  void _showCalendar() async {
-    try {
-      // Navigiraj na CalendarScreen
-      final result = await Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (ctx) => const CalendarScreen(),
-        ),
-      );
-
-      // Refresh data ako je potrebno (za buduće funkcionalnosti)
-      if (result == true) {
-        await _fastLoadBasicLocations();
-      }
-
-    } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Row(
-            children: [
-              const Icon(Icons.error, color: Colors.white),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text('Error opening calendar: $e'),
-              ),
-            ],
-          ),
-          backgroundColor: Colors.red,
-          duration: const Duration(seconds: 3),
-        ),
-      );
-    }
-  }
-
-  // Sortira task-ove po udaljenosti od trenutne lokacije
-  Future<List<TaskLocation>> _sortTasksByDistance(List<TaskLocation> tasks) async {
-    try {
-      // Pokušaj da dobiješ trenutnu lokaciju
-      final currentPosition = await LocationService.getCurrentLocation();
-
-      if (currentPosition == null) {
-        // Ako nema lokacije, vrati originalni redosled
-        return tasks;
-      }
-
-      // Kreiraj listu sa udaljenostima
-      List<TaskWithDistance> tasksWithDistance = [];
-
-      for (final task in tasks) {
-        final distance = _calculateDistance(
-          currentPosition.latitude,
-          currentPosition.longitude,
-          task.latitude,
-          task.longitude,
-        );
-
-        tasksWithDistance.add(TaskWithDistance(task, distance));
-      }
-
-      // Sortiraj po udaljenosti (najbliži prvi)
-      tasksWithDistance.sort((a, b) => a.distance.compareTo(b.distance));
-
-      // Vrati samo task-ove
-      final sortedTasks = tasksWithDistance.map((twd) => twd.task).toList();
-
-      return sortedTasks;
-
-    } catch (e) {
-      return tasks; // Fallback na originalni redosled
-    }
-  }
-
-
-  /// Pokreće praćenje lokacije za auto focus funkcionalnost
-  Future<void> _startLocationTracking() async {
-    if (_isTrackingLocation) return;
-
-    try {
-      bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
-      if (!serviceEnabled) {
-        debugPrint('❌ Location services are disabled');
-        return;
-      }
-
-      LocationPermission permission = await Geolocator.checkPermission();
-      if (permission == LocationPermission.denied) {
-        permission = await Geolocator.requestPermission();
-        if (permission == LocationPermission.denied) {
-          debugPrint('❌ Location permissions are denied');
-          return;
-        }
-      }
-
-      if (permission == LocationPermission.deniedForever) {
-        debugPrint('❌ Location permissions are permanently denied');
-        return;
-      }
-
-      _isTrackingLocation = true;
-      debugPrint('✅ Auto focus location tracking started');
-
-      // Konfiguracija za location stream
-      const LocationSettings locationSettings = LocationSettings(
-        accuracy: LocationAccuracy.high,
-        distanceFilter: 10, // Update every 10 meters
-      );
-
-      _positionStream = Geolocator.getPositionStream(
-        locationSettings: locationSettings,
-      ).listen(
-            (Position position) {
-          _handleLocationUpdate(position);
-        },
-        onError: (error) {
-          debugPrint('❌ Location stream error: $error');
-          _stopLocationTracking();
-        },
-      );
-
-    } catch (e) {
-      debugPrint('❌ Error starting location tracking: $e');
-      _isTrackingLocation = false;
-    }
-  }
-
-  /// Zaustavlja praćenje lokacije
-  void _stopLocationTracking() {
-    if (!_isTrackingLocation) return;
-
-    try {
-      _positionStream?.cancel();
-      _positionStream = null;
-      _isTrackingLocation = false;
-      debugPrint('🛑 Auto focus location tracking stopped');
-    } catch (e) {
-      debugPrint('❌ Error stopping location tracking: $e');
-    }
-  }
-
-  /// Rukuje ažuriranjem lokacije za auto focus
-  void _handleLocationUpdate(Position position) {
-    if (_isManuallyFocusing) {
-      print('⏸️ LOCATION UPDATE: Skipping because manually focusing on task');
-      return;
-    }
-
-    print('🔍 LOCATION UPDATE: Dobijen position = lat: ${position.latitude}, lng: ${position.longitude}');
-    print('🔍 LOCATION UPDATE: _autoFocusEnabled = $_autoFocusEnabled');
-    print('🔍 LOCATION UPDATE: _isMapReady = $_isMapReady');
-    print('🔍 LOCATION UPDATE: _mapController != null = ${_mapController != null}');
-
-    if (!_autoFocusEnabled || !_isMapReady || _mapController == null) {
-      print('❌ LOCATION UPDATE: Izlazim zbog uslova - neću ažurirati _currentLocation!');
-      return;
-    }
-
-    try {
-      final newLocation = LatLng(position.latitude, position.longitude);
-      print('🔍 LOCATION UPDATE: Nova lokacija = $newLocation');
-      print('🔍 LOCATION UPDATE: Stara _currentLocation = $_currentLocation');
-
-      // Ažuriraj mapu samo ako je korisnik značajno pomjerio
-      if (_currentLocation == null ||
-          _calculateDistance(
-              _currentLocation!.latitude,
-              _currentLocation!.longitude,
-              newLocation.latitude,
-              newLocation.longitude
-          ) > 20) { // 20 metara threshold
-
-        print('✅ LOCATION UPDATE: Postavljam _currentLocation = $newLocation');
-        _currentLocation = newLocation;
-
-        // Animiraj kameru na novu lokaciju
-        _mapController!.animateCamera(
-          CameraUpdate.newCameraPosition(
-            CameraPosition(
-              target: newLocation,
-              zoom: 16.0, // Optimalni zoom za praćenje
-              bearing: position.heading, // Prati smjer kretanja
-              tilt: 30.0, // Lagani tilt za bolje praćenje
-            ),
-          ),
-        );
-
-        print('✅ LOCATION UPDATE: Kamera ažurirana');
-      } else {
-        print('⏭️ LOCATION UPDATE: Premala promena distance, ne ažuriram');
-      }
-    } catch (e) {
-      print('❌ LOCATION UPDATE Error: $e');
-    }
-  }
-
-
-  Future<void> _updateMapWithSearchResults() async {
-    Set<Marker> allMarkers = Set.from(_markers);
-
-    // Remove old search markers
-    allMarkers.removeWhere((marker) => marker.markerId.value.startsWith('search_'));
-
-    // Add new search markers
-    allMarkers.addAll(_searchMarkers);
-
-    setState(() {
-      _markers = allMarkers;
-    });
-  }
-
-  Future<void> _returnToTaskDetailWithLocation(LatLng selectedLocation, String locationName) async {
-    if (_pendingTaskState == null) return;
-
-    // Clear search state
-    setState(() {
-      _searchMarkers.clear();
-      _isSearchingForTaskInput = false;
-    });
-    await _updateMapWithSearchResults();
-
-    // Store the pending state before clearing it
-    final currentPendingState = _pendingTaskState!;
-    _pendingTaskState = null; // Clear immediately after storing
-
-    // Navigate to TaskDetailScreenWithState with restored state and new location
-    final result = await Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (ctx) => TaskDetailScreenWithState(
-          taskLocation: _createTaskLocationFromState(currentPendingState!),
-          selectedLocation: selectedLocation,
-          selectedLocationName: locationName,
-          savedState: currentPendingState!,
-        ),
-      ),
-    );
-
-    // Clear pending state
-    _pendingTaskState = null;
-
-    // Handle result
-    if (result != null) {
-      if (result == true) {
-        await _loadSavedLocationsWithRefresh();
-      } else if (result is Map && result['refresh'] == true) {
-        await _loadSavedLocationsWithRefresh();
-        if (result['focusLocation'] != null) {
-          await _focusOnNewLocation(result['focusLocation'] as LatLng);
-        }
-      }
-    }
-  }
-
-  // Helper method to create TaskLocation from saved state:
-  TaskLocation _createTaskLocationFromState(Map<String, dynamic> state) {
-    DateTime? scheduledDateTime;
-    if (state['scheduledDate'] != null && state['scheduledTime'] != null) {
-      final date = DateTime.parse(state['scheduledDate']);
-      final timeData = state['scheduledTime'];
-      scheduledDateTime = DateTime(
-        date.year,
-        date.month,
-        date.day,
-        timeData['hour'],
-        timeData['minute'],
-      );
-    }
-
-    return TaskLocation(
-      id: state['taskId'],
-      latitude: state['originalLocation']['latitude'],
-      longitude: state['originalLocation']['longitude'],
-      title: state['title'] ?? '',
-      taskItems: List<String>.from(state['items'] ?? []),
-      colorHex: '#${(state['selectedColor'] ?? Colors.teal.value).toRadixString(16).substring(2)}',
-      scheduledDateTime: scheduledDateTime,
-      linkedCalendarEventId: state['linkedCalendarEventId'],
-    );
-  }
-
-  Future<void> _performInitialLocationFocus() async {
-    try {
-      // Wait for map to be ready
-      int waitAttempts = 0;
-      while (!_isMapReady && waitAttempts < 30) {
-        await Future.delayed(const Duration(milliseconds: 100));
-        waitAttempts++;
-      }
-
-      if (!_isMapReady || _mapController == null) {
-        print('Map not ready for initial focus');
-        return;
-      }
-
-      // Get current location using existing service
-      final position = await LocationService.getCurrentLocation();
-
-      if (position != null) {
-        final userLocation = LatLng(position.latitude, position.longitude);
-
-        // Update current location variable
-        _currentLocation = userLocation;
-
-        // Focus camera on user location
-        await _mapController!.animateCamera(
-          CameraUpdate.newCameraPosition(
-            CameraPosition(
-              target: userLocation,
-              zoom: 16.0,
-              bearing: 0,
-              tilt: 0,
-            ),
-          ),
-        );
-
-        print('Initial camera focused on user location');
-
-      } else {
-        print('Could not get initial location, keeping default');
-      }
-
-    } catch (e) {
-      print('Error during initial location focus: $e');
-    }
-  }
-
-  // PUBLIC METHODS for MainNavigationScreen communication
-  Future<void> performSearch(String searchTerm) async {
-    if (searchTerm.trim().isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Please enter a search term'),
-          backgroundColor: Colors.orange,
-        ),
-      );
-      return;
-    }
-
-    try {
-      LatLng searchCenter = LatLng(48.2082, 16.3738); // Default Vienna
-      if (_currentLocation != null) {
-        searchCenter = _currentLocation!;
-      }
-
-      final url = 'https://maps.googleapis.com/maps/api/place/nearbysearch/json'
-          '?location=${searchCenter.latitude},${searchCenter.longitude}'
-          '&radius=5000'
-          '&keyword=${Uri.encodeComponent(searchTerm)}'
-          '&key=$googleApiKey';
-
-      final response = await http.get(Uri.parse(url));
-
-      if (response.statusCode == 200) {
-        final body = json.decode(response.body);
-        final List results = body['results'];
-
-        Set<Marker> searchMarkers = {};
-
-        for (final place in results) {
-          final lat = place['geometry']['location']['lat'];
-          final lng = place['geometry']['location']['lng'];
-          final name = place['name'];
-
-          searchMarkers.add(
-            Marker(
-              markerId: MarkerId('search_${place['place_id']}'),
-              position: LatLng(lat, lng),
-              icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueRed),
-              infoWindow: InfoWindow(
-                title: name,
-                snippet: 'Tap to create task here',
-              ),
-              onTap: () async {
-                setState(() {
-                  _searchMarkers.clear();
-                });
-                await _updateMapWithSearchResults();
-
-                final result = await Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (ctx) => TaskInputScreen(
-                      location: LatLng(lat, lng),
-                      locationName: name,
-                    ),
-                  ),
-                );
-
-                if (result == true) {
-                  await _loadSavedLocationsAndFocusNew();
-                }
-              },
-            ),
-          );
-        }
-
-        setState(() {
-          _searchMarkers = searchMarkers;
-        });
-
-        await _updateMapWithSearchResults();
-
-        if (_mapController != null && results.isNotEmpty) {
-          _mapController!.animateCamera(
-            CameraUpdate.newLatLngZoom(searchCenter, 14),
-          );
-        }
-
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              results.isEmpty
-                  ? 'No locations found for "$searchTerm"'
-                  : 'Found ${results.length} locations',
-            ),
-            backgroundColor: results.isEmpty ? Colors.blue : Colors.green,
-          ),
-        );
-
-      } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Failed to search locations'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
-
-    } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Search error: $e'),
-          backgroundColor: Colors.red,
-        ),
-      );
-    }
-  }
-
-// Fokusira mapu na određeni task
-  Future<void> _focusOnTaskLocation(TaskLocation task) async {
-    try {
-      if (_mapController != null) {
-        await _mapController!.animateCamera(
-          CameraUpdate.newCameraPosition(
-            CameraPosition(
-              target: LatLng(task.latitude, task.longitude),
-              zoom: 17.0,
-              bearing: 0,
-              tilt: 0,
-            ),
-          ),
-        );
-
-        // Pošalji potvrdu korisniku
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Row(
-              children: [
-                const Icon(Icons.location_on, color: Colors.white),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text('Focused on: ${task.title}'),
-                ),
-              ],
-            ),
-            backgroundColor: Colors.green,
-            duration: const Duration(seconds: 2),
-          ),
-        );
-      }
-    } catch (e) {
-      // Silent fail in production
-    }
-  }
-
-  // PUBLIC wrapper for MainNavigationScreen communication
-  Future<void> focusOnTaskLocation(TaskLocation task) async {
-    print('🗺️ MAP FOCUS DEBUG: Starting focus on task: ${task.title}');
-    print('🗺️ MAP FOCUS DEBUG: Task coordinates: ${task.latitude}, ${task.longitude}');
-
-    try {
-      if (_mapController != null && _isMapReady) {
-        // POSTAVITI FLAG DA SPREČIMO AUTO FOCUS
-        _isManuallyFocusing = true;
-        print('🗺️ MAP FOCUS DEBUG: Set manual focusing flag = true');
-
-        print('🗺️ MAP FOCUS DEBUG: Animating camera to task location');
-
-        await _mapController!.animateCamera(
-          CameraUpdate.newCameraPosition(
-            CameraPosition(
-              target: LatLng(task.latitude, task.longitude),
-              zoom: 18.0,
-              bearing: 0,
-              tilt: 45.0,
-            ),
-          ),
-        );
-
-        print('✅ MAP FOCUS DEBUG: Camera animation completed');
-
-        // Snackbar potvrda
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Row(
-                children: [
-                  const Icon(Icons.location_on, color: Colors.white),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text('Focused on: ${task.title}'),
-                  ),
-                ],
-              ),
-              backgroundColor: Colors.green,
-              duration: const Duration(seconds: 5), // Povećano na 5 sekundi
-            ),
-          );
-        }
-
-        // SAČEKAJ 5 SEKUNDI PA UKLONI FLAG
-        Future.delayed(const Duration(seconds: 5), () {
-          print('🗺️ MAP FOCUS DEBUG: Clearing manual focusing flag');
-          _isManuallyFocusing = false;
-        });
-
-      } else {
-        print('❌ MAP FOCUS DEBUG: Map controller not ready!');
-      }
-    } catch (e) {
-      print('❌ MAP FOCUS DEBUG: Error during camera animation: $e');
-      _isManuallyFocusing = false; // Ukloni flag u slučaju greške
-    }
-  }
-
-  @override
-  void dispose() {
-    WidgetsBinding.instance.removeObserver(this);
-    _pulseController.dispose();
-    super.dispose();
-  }
-}
+              infoWindow: gmaps.InfoWindow(title: task.title),
+			onTap: () => _handleTaskTap(task), // SAME functionality
+					   ),
+					 );
+
+					 // Update UI gradually
+					 if (mounted && _currentMapProvider == MapProvider.googleMaps) {
+					   setState(() {
+						 _googleMarkers = updatedMarkers;
+					   });
+					 }
+
+					 // Short pause between markers
+					 await Future.delayed(Duration(milliseconds: 50));
+				   }
+				 } catch (e) {
+				   print('Error upgrading Google markers: $e');
+				 }
+			   });
+			 }
+
+			 Future<void> _handleTaskTap(TaskLocation task) async {
+			   final result = await Navigator.push(
+				 context,
+				 MaterialPageRoute(
+				   builder: (ctx) => TaskDetailScreen(taskLocation: task),
+				 ),
+			   );
+
+			   if (result != null) {
+				 if (result == true) {
+				   await _loadSavedLocationsWithRefresh();
+				 } else if (result is Map) {
+				   if (result['refresh'] == true) {
+					 await _loadSavedLocationsWithRefresh();
+					 if (result['focusLocation'] != null) {
+					   await _focusOnNewLocation(UniversalLatLng.fromGoogleMaps(result['focusLocation'] as gmaps.LatLng));
+					 }
+				   } else if (result['action'] == 'openLocationSearchForEdit') {
+					 // User wants to search for location from TaskDetail
+
+					 // RESET previous state first
+					 _pendingTaskState = null;
+					 _isSearchingForTaskInput = false;
+
+					 // Set new state
+					 _pendingTaskState = result['taskState'];
+					 _isSearchingForTaskInput = true;
+
+					 // Open search mode
+					 setState(() {
+
+					 });
+
+					 // Show helpful message
+					 ScaffoldMessenger.of(context).showSnackBar(
+					   const SnackBar(
+						 content: Text('Search for a new location to update your task'),
+						 backgroundColor: Colors.blue,
+						 duration: Duration(seconds: 3),
+					   ),
+					 );
+				   }
+				 }
+			   }
+			 }
+
+			 // OPTIMIZED geofencing initialization (unchanged)
+			 void _initializeGeofencingSystemFast() {
+			   // RUN IN BACKGROUND - don't wait
+			   Future.delayed(Duration(milliseconds: 500), () async {
+				 try {
+				   // GEOFENCING INITIALIZATION - same logic, but WITHOUT long delays
+				   initializeScreenGeofencing(
+					 onGeofenceEvent: _handleGeofenceEvent,
+				   );
+
+				   final helper = GeofencingIntegrationHelper.instance;
+
+				   if (!helper.isInitialized) {
+					 final initialized = await helper.initializeGeofencing(
+					   autoStartService: true,
+					   onGeofenceEvent: _handleGeofenceEvent,
+					 );
+
+					 if (initialized) {
+					   // LOAD EXISTING TASKS - optimized version (already removed delays)
+					   await helper.initializeExistingTasks();
+					 }
+				   }
+
+				 } catch (e) {
+				   print('Geofencing initialization error: $e');
+				 }
+			   });
+			 }
+
+			 Future<void> _initializePreviousTaskCount() async {
+			   final taskLocations = await DatabaseHelper.instance.getAllTaskLocations();
+			   _previousTaskCount = taskLocations.length;
+			 }
+
+			 Future<void> _checkForTaskDetailFromNotification() async {
+			   try {
+				 const platform = MethodChannel('com.example.locado_final/task_detail');
+				 final result = await platform.invokeMethod('checkPendingTaskDetail');
+
+				 if (result != null && result['hasTaskDetail'] == true) {
+				   final taskId = result['taskId'] as String;
+				   final taskTitle = result['taskTitle'] as String;
+				   final fromNotification = result['fromNotification'] as bool;
+
+				   // Load task from database and navigate
+				   await _navigateToTaskDetail(taskId, taskTitle);
+				 }
+			   } catch (e) {
+				 print('Error checking task detail from notification: $e');
+			   }
+			 }
+
+			 Future<void> _navigateToTaskDetail(String taskId, String taskTitle) async {
+			   try {
+				 // Find task in database
+				 final taskLocations = await DatabaseHelper.instance.getAllTaskLocations();
+				 final task = taskLocations.firstWhere(
+					   (task) => task.id.toString() == taskId,
+				   orElse: () => throw Exception('Task not found'),
+				 );
+
+				 // Navigate to TaskDetailScreen
+				 final result = await Navigator.push(
+				   context,
+				   MaterialPageRoute(
+					 builder: (ctx) => TaskDetailScreen(taskLocation: task),
+				   ),
+				 );
+
+				 // Handle result
+				 if (result != null) {
+				   if (result == true) {
+					 await _loadSavedLocationsWithRefresh();
+				   } else if (result is Map && result['refresh'] == true) {
+					 await _loadSavedLocationsWithRefresh();
+					 if (result['focusLocation'] != null) {
+					   await _focusOnNewLocation(UniversalLatLng.fromGoogleMaps(result['focusLocation'] as gmaps.LatLng));
+					 }
+				   }
+				 }
+
+			   } catch (e) {
+				 ScaffoldMessenger.of(context).showSnackBar(
+				   SnackBar(
+					 content: Text('Error opening task: $e'),
+					 backgroundColor: Colors.red,
+				   ),
+				 );
+			   }
+			 }
+
+			 Future<void> _showViberStyleAlert(GeofenceEvent event) async {
+			   try {
+				 await platformLockScreen.invokeMethod('showLockScreenAlert', {
+				   'taskTitle': event.title ?? 'Task Location',
+				   'taskMessage': 'You are near: ${event.title ?? "a task location"}',
+				   'taskId': event.taskId ?? 'unknown',
+				 });
+			   } catch (e) {
+				 // Fallback to existing method
+				 await _showRegularWakeNotification(event);
+			   }
+			 }
+
+			 @override
+			 void didChangeAppLifecycleState(AppLifecycleState state) {
+			   super.didChangeAppLifecycleState(state);
+
+			   switch (state) {
+				 case AppLifecycleState.resumed:
+				   _isAppInForeground = true;
+				   if (_autoFocusEnabled) {
+					 _startLocationTracking();
+				   }
+				   break;
+				 case AppLifecycleState.paused:
+				 case AppLifecycleState.inactive:
+				 case AppLifecycleState.detached:
+				   _isAppInForeground = false;
+				   break;
+				 case AppLifecycleState.hidden:
+				   break;
+			   }
+			 }
+
+			 Future<void> _initializeNotifications() async {
+			   const AndroidInitializationSettings initializationSettingsAndroid =
+			   AndroidInitializationSettings('@mipmap/ic_launcher');
+			   final InitializationSettings initializationSettings =
+			   InitializationSettings(android: initializationSettingsAndroid);
+			   await _flutterLocalNotificationsPlugin.initialize(initializationSettings,
+				 onDidReceiveNotificationResponse: _onNotificationTapped,);
+
+			   // Main location notification channel
+			   const AndroidNotificationChannel locationChannel = AndroidNotificationChannel(
+				 'location_channel',
+				 'Location Notifications',
+				 description: 'Smart geofencing notifications',
+				 importance: Importance.max,
+				 enableVibration: true,
+				 playSound: true,
+				 showBadge: true,
+				 enableLights: true,
+				 ledColor: const Color.fromARGB(255, 255, 0, 0),
+			   );
+
+			   const AndroidNotificationChannel wakeChannel = AndroidNotificationChannel(
+				 'geofence_wake_channel',
+				 'Geofence Wake Alerts',
+				 description: 'Location alerts that wake the screen',
+				 importance: Importance.max,
+				 enableVibration: true,
+				 playSound: true,
+				 showBadge: true,
+				 enableLights: true,
+				 ledColor: const Color.fromARGB(255, 0, 255, 0),
+			   );
+
+			   const AndroidNotificationChannel testChannel = AndroidNotificationChannel(
+				 'test_channel',
+				 'Test Notifications',
+				 description: 'For testing notification settings',
+				 importance: Importance.max,
+				 enableVibration: true,
+				 playSound: true,
+			   );
+
+			   final androidPlugin = _flutterLocalNotificationsPlugin
+				   .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>();
+
+			   if (androidPlugin != null) {
+				 await androidPlugin.createNotificationChannel(locationChannel);
+				 await androidPlugin.createNotificationChannel(testChannel);
+				 await androidPlugin.createNotificationChannel(wakeChannel);
+			   }
+			 }
+
+			 Future<void> _requestNotificationPermission() async {
+			   final status = await Permission.notification.status;
+			   if (!status.isGranted) {
+				 await Permission.notification.request();
+			   }
+			 }
+
+			 Future<void> _loadSettings() async {
+			   final prefs = await SharedPreferences.getInstance();
+			   final distance = prefs.getInt('notification_distance') ?? 100;
+			   final autoFocus = prefs.getBool('auto_focus_enabled') ?? true;
+
+			   setState(() {
+				 _notificationDistance = distance;
+				 _autoFocusEnabled = autoFocus;
+			   });
+
+			   final lastWarningStr = prefs.getString('last_battery_warning');
+			   if (lastWarningStr != null) {
+				 _lastBatteryCheck = DateTime.parse(lastWarningStr);
+				 print('🔋 Loaded last battery warning: $_lastBatteryCheck');
+			   }
+
+			   // START/STOP LOCATION TRACKING ACCORDING TO SETTING
+			   if (_autoFocusEnabled) {
+				 _startLocationTracking();
+			   } else {
+				 _stopLocationTracking();
+			   }
+			 }
+
+			 Future<gmaps.BitmapDescriptor> createCustomMarker(String title, Color color) async {
+			   final ui.PictureRecorder recorder = ui.PictureRecorder();
+			   final Canvas canvas = Canvas(recorder);
+			   const double size = 150.0;
+
+			   final Paint shadowPaint = Paint()
+				 ..color = Colors.black.withOpacity(0.25)
+				 ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 10);
+
+			   final Paint markerPaint = Paint()..color = color;
+			   canvas.drawCircle(const Offset(size / 2 + 2, size / 2 - 8), size / 2 - 10, shadowPaint);
+			   canvas.drawCircle(const Offset(size / 2, size / 2 - 10), size / 2 - 10, markerPaint);
+
+			   final Path triangle = Path();
+			   triangle.moveTo(size / 2 - 25, size / 2 + 10);
+			   triangle.lineTo(size / 2 + 25, size / 2 + 10);
+			   triangle.lineTo(size / 2, size + 30);
+			   triangle.close();
+			   canvas.drawPath(triangle, markerPaint);
+
+			   final TextPainter textPainter = TextPainter(textDirection: TextDirection.ltr);
+			   String shortTitle = title.length > 10 ? '${title.substring(0, 10)}...' : title;
+			   textPainter.text = TextSpan(
+				 text: shortTitle,
+				 style: const TextStyle(fontSize: 24, color: Colors.white, fontWeight: FontWeight.bold),
+			   );
+			   textPainter.layout();
+			   textPainter.paint(canvas, Offset((size - textPainter.width) / 2, (size / 2 - 10 - textPainter.height / 2)));
+
+			   final img = await recorder.endRecording().toImage(size.toInt(), (size + 30).toInt());
+			   final byteData = await img.toByteData(format: ui.ImageByteFormat.png);
+			   return gmaps.BitmapDescriptor.fromBytes(byteData!.buffer.asUint8List());
+			 }
+
+			 double _calculateDistance(double lat1, double lon1, double lat2, double lon2) {
+			   const earthRadius = 6371000;
+			   final dLat = _degreesToRadians(lat2 - lat1);
+			   final dLon = _degreesToRadians(lon2 - lon1);
+			   final a = (sin(dLat / 2) * sin(dLat / 2)) +
+				   cos(_degreesToRadians(lat1)) * cos(_degreesToRadians(lat2)) *
+					   (sin(dLon / 2) * sin(dLon / 2));
+			   final c = 2 * atan2(sqrt(a), sqrt(1 - a));
+			   return earthRadius * c;
+			 }
+
+			 double _degreesToRadians(double degrees) {
+			   return degrees * pi / 180;
+			 }
+
+			 String _formatDistance(double distanceInMeters) {
+			   // Check if device uses imperial units (US, UK, Burma)
+			   final locale = WidgetsBinding.instance.platformDispatcher.locale;
+			   final useImperialUnits = ['US', 'GB', 'MM'].contains(locale.countryCode);
+
+			   if (useImperialUnits) {
+				 // Convert to miles (1 meter = 0.000621371 miles)
+				 final miles = distanceInMeters * 0.000621371;
+				 if (miles < 0.1) {
+				   final feet = distanceInMeters * 3.28084; // Convert to feet
+				   return '${feet.round()} ft';
+				 } else {
+				   return '${miles.toStringAsFixed(1)} mi';
+				 }
+			   } else {
+				 // Use metric system
+				 if (distanceInMeters < 1000) {
+				   return '${distanceInMeters.round()} m';
+				 } else {
+				   final kilometers = distanceInMeters / 1000;
+				   return '${kilometers.toStringAsFixed(1)} km';
+				 }
+			   }
+			 }
+
+			 // HYBRID BUILD METHOD: Choose correct map widget based on provider
+			 @override
+			 Widget build(BuildContext context) {
+			   print('🎨 BUILD DEBUG: brightness = ${Theme.of(context).brightness}');
+			   print('🎨 BUILD DEBUG: cardColor = ${Theme.of(context).cardColor}');
+			   print('🎨 BUILD DEBUG: primaryColor = ${Theme.of(context).primaryColor}');
+			   print('🎨 BUILD DEBUG: scaffoldBackgroundColor = ${Theme.of(context).scaffoldBackgroundColor}');
+			   print('🗺️ HYBRID BUILD: Using ${_currentMapProvider.name}');
+
+			   return Scaffold(
+				 body: Stack(
+				   children: [
+					 // HYBRID MAP WIDGET - choose based on provider
+					 if (_currentMapProvider == MapProvider.googleMaps)
+					   _buildGoogleMap()
+					 else
+					   _buildOpenStreetMap(),
+
+					 // Animated builder for nearby tasks (works with both providers)
+					 AnimatedBuilder(
+					   animation: _pulseController,
+					   builder: (context, child) {
+						 return Stack(
+						   children: _nearbyTasks.map((task) {
+							 final animation = Tween(begin: 20.0, end: 40.0).animate(_pulseController);
+							 
+							 if (_currentMapProvider == MapProvider.googleMaps) {
+							   return FutureBuilder<gmaps.ScreenCoordinate>(
+								 future: _googleMapController?.getScreenCoordinate(gmaps.LatLng(task.latitude, task.longitude)),
+								 builder: (context, snapshot) {
+								   if (!snapshot.hasData) return const SizedBox.shrink();
+								   final screenPoint = snapshot.data!;
+								   return _buildPulseWidget(animation, screenPoint.x.toDouble(), screenPoint.y.toDouble(), task);
+								 },
+							   );
+							 } else {
+							   // For OSM, we'll need to implement screen coordinate conversion
+							   // For now, return empty widget
+							   return const SizedBox.shrink();
+							 }
+						   }).toList(),
+						 );
+					   },
+					 ),
+
+					 // Loading indicator
+					 if (_isLoading)
+					   const Center(child: CircularProgressIndicator()),					
+				   ],
+				 ),
+
+				 // Battery Optimization FAB
+				 floatingActionButton: _showBatteryFAB ? FloatingActionButton(
+				   onPressed: _showBatteryOptimizationDialog,
+				   backgroundColor: Colors.orange,
+				   foregroundColor: Colors.white,
+				   child: const Icon(Icons.battery_alert, size: 28),
+				   elevation: 6,
+				   heroTag: "battery_fab",
+				 ) : null,
+
+				 floatingActionButtonLocation: FloatingActionButtonLocation.startTop,
+			   );
+			 }
+
+			 // GOOGLE MAPS widget
+			 Widget _buildGoogleMap() {
+			   return gmaps.GoogleMap(
+				 onMapCreated: (controller) {
+				   _googleMapController = controller;
+				   _isMapReady = true;
+				   print('✅ HYBRID: Google Map controller ready');
+				 },
+				 initialCameraPosition: gmaps.CameraPosition(
+				   target: widget.selectedLocation ?? gmaps.LatLng(48.2082, 16.3738),
+				   zoom: 15,
+				 ),
+				 markers: _googleMarkers,
+				 myLocationEnabled: true,
+				 myLocationButtonEnabled: true,
+				 onLongPress: (gmaps.LatLng position) async {
+				   final result = await Navigator.push(
+					 context,
+					 MaterialPageRoute(builder: (ctx) => TaskInputScreen(location: position)),
+				   );
+				   if (result == true) {
+					 _fastLoadBasicLocations();
+				   }
+				 },
+				 onTap: (gmaps.LatLng location) {
+				   // Clear search results when tapping on map
+				   if (_googleSearchMarkers.isNotEmpty) {
+					 setState(() {
+					   _googleSearchMarkers.clear();
+					 });
+					 _updateMapWithSearchResults();
+					 ScaffoldMessenger.of(context).showSnackBar(
+					   const SnackBar(
+						 content: Text('Search results cleared'),
+						 backgroundColor: Colors.blue,
+						 duration: Duration(seconds: 2),
+					   ),
+					 );
+				   } else {
+					 _centerCameraOnLocation(UniversalLatLng.fromGoogleMaps(location));
+				   }
+				 },
+			   );
+			 }
+
+			 // OPENSTREETMAP widget
+			 Widget _buildOpenStreetMap() {
+			   return OSMMapWidget(
+				 initialCameraPosition: OSMCameraPosition(
+				   target: widget.selectedLocation != null 
+					   ? ll.LatLng(widget.selectedLocation!.latitude, widget.selectedLocation!.longitude)
+					   : ll.LatLng(48.2082, 16.3738),
+				   zoom: 15.0,
+				 ),
+				 markers: _osmMarkers,
+				 onMapCreated: (controller) {
+				   _osmMapController = controller;
+				   _isMapReady = true;
+				   print('✅ HYBRID: OSM Map controller ready');
+				 },
+				 myLocationEnabled: true,
+				 myLocationButtonEnabled: true,
+				 onLongPress: (ll.LatLng position) async {
+				   final result = await Navigator.push(
+					 context,
+					 MaterialPageRoute(builder: (ctx) => TaskInputScreen(location: gmaps.LatLng(position.latitude, position.longitude))),
+				   );
+				   if (result == true) {
+					 _fastLoadBasicLocations();
+				   }
+				 },
+				 onTap: (ll.LatLng location) {
+				   // Clear search results when tapping on map
+				   if (_osmSearchMarkers.isNotEmpty) {
+					 setState(() {
+					   _osmSearchMarkers.clear();
+					 });
+					 _updateMapWithSearchResults();
+					 ScaffoldMessenger.of(context).showSnackBar(
+					   const SnackBar(
+						 content: Text('Search results cleared'),
+						 backgroundColor: Colors.blue,
+						 duration: Duration(seconds: 2),
+					   ),
+					 );
+				   } else {
+					 _centerCameraOnLocation(UniversalLatLng.fromOpenStreetMap(location));
+				   }
+				 },
+			   );
+			 }
+
+			 // Build pulse widget for nearby tasks
+			 Widget _buildPulseWidget(Animation<double> animation, double x, double y, TaskLocation task) {
+			   return Positioned(
+				 left: x - animation.value / 2,
+				 top: y - animation.value / 2,
+				 child: GestureDetector(
+				   onTap: () async {
+					 final result = await Navigator.push(
+					   context,
+					   MaterialPageRoute(builder: (ctx) => TaskDetailScreen(taskLocation: task)),
+					 );
+					 if (result == true) {
+					   _fastLoadBasicLocations();
+					 }
+				   },
+				   child: Column(
+					 children: [
+					   Container(
+						 width: animation.value,
+						 height: animation.value,
+						 decoration: BoxDecoration(
+						   shape: BoxShape.circle,
+						   color: Colors.teal.withOpacity(0.3),
+						 ),
+					   ),
+					   const SizedBox(height: 4),
+					   Container(
+						 padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+						 decoration: BoxDecoration(
+						   color: Colors.white,
+						   borderRadius: BorderRadius.circular(4),
+						   boxShadow: [BoxShadow(color: Colors.black12, blurRadius: 2)],
+						 ),
+						 child: Text(
+						   task.title,
+						   style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold),
+						 ),
+					   )
+					 ],
+				   ),
+				 ),
+			   );
+			 }
+
+			 // REMAINING METHODS (continue with existing methods but make them provider-aware)
+			 
+			 Future<void> _loadSavedLocationsAndFocusNew() async {
+			   try {
+				 List<Location> locations = await DatabaseHelper.instance.getAllLocations();
+				 List<TaskLocation> taskLocations = await DatabaseHelper.instance.getAllTaskLocations();
+
+				 // Find new task (last in list)
+				 TaskLocation? newTask;
+				 if (taskLocations.isNotEmpty) {
+				   if (_savedLocations.length < taskLocations.length) {
+					 // Has new task
+					 newTask = taskLocations.last;
+					 _lastAddedTask = newTask;
+				   }
+				 }
+
+				 _savedLocations = taskLocations;
+
+				 // Create markers for current provider
+				 if (_currentMapProvider == MapProvider.googleMaps) {
+				   await _createGoogleMarkersWithCustomIcons(locations, taskLocations);
+				 } else {
+				   await _createOSMMarkers(locations, taskLocations);
+				 }
+
+				 setState(() {
+				   _isLoading = false;
+				 });
+
+				 // FOCUS ON NEW LOCATION
+				 if (newTask != null) {
+				   await _focusOnNewTask(newTask);
+				 }
+
+				 // Geofencing sync
+				 if (isGeofencingEnabled && _savedLocations.isNotEmpty) {
+				   await syncTaskLocationsFromScreen(_savedLocations);
+				 }
+			   } catch (e) {
+				 setState(() {
+				   _isLoading = false;
+				 });
+			   }
+			 }
+
+			 // Create Google markers with custom icons (for focus new functionality)
+			 Future<void> _createGoogleMarkersWithCustomIcons(List<Location> locations, List<TaskLocation> taskLocations) async {
+			   Set<gmaps.Marker> newMarkers = {};
+
+			   // Add location markers
+			   for (var location in locations) {
+				 newMarkers.add(
+				   gmaps.Marker(
+					 markerId: gmaps.MarkerId('location_${location.id}'),
+					 position: gmaps.LatLng(location.latitude!, location.longitude!),
+					 infoWindow: gmaps.InfoWindow(
+					   title: location.description ?? 'No Description',
+					   snippet: location.type ?? 'No Type',
+					 ),
+				   ),
+				 );
+			   }
+
+			   // Add task markers with custom icons
+			   for (var task in taskLocations) {
+				 final color = Color(int.parse(task.colorHex.replaceFirst('#', '0xff')));
+				 final icon = await createCustomMarker(task.title, color);
+
+				 newMarkers.add(
+				   gmaps.Marker(
+					 markerId: gmaps.MarkerId('task_${task.id}'),
+					 position: gmaps.LatLng(task.latitude, task.longitude),
+					 icon: icon,
+					 infoWindow: gmaps.InfoWindow(title: task.title),
+					 onTap: () => _handleTaskTap(task),
+				   ),
+				 );
+			   }
+
+			   setState(() {
+				 _googleMarkers = newMarkers;
+			   });
+			 }
+
+			 // HYBRID: Focus on new task
+			 Future<void> _focusOnNewTask(TaskLocation task) async {
+			   try {
+				 final universalLocation = UniversalLatLng(task.latitude, task.longitude);
+				 
+				 if (_currentMapProvider == MapProvider.googleMaps && _googleMapController != null) {
+				   // Animate camera to new task location
+				   await _googleMapController!.animateCamera(
+					 gmaps.CameraUpdate.newCameraPosition(
+					   gmaps.CameraPosition(
+						 target: universalLocation.toGoogleMaps(),
+						 zoom: 17.0, // Close zoom level to see the task clearly
+						 bearing: 0,
+						 tilt: 0,
+					   ),
+					 ),
+				   );
+				 } else if (_currentMapProvider == MapProvider.openStreetMap && _osmMapController != null) {
+				   // Move OSM camera to new task location
+				   _osmMapController!.move(universalLocation.toOpenStreetMap(), 17.0);
+				 }
+
+				 print('✅ HYBRID: Focused on new task: ${task.title}');
+			   } catch (e) {
+				 print('Error focusing on new task: $e');
+			   }
+			 }
+
+			 // HYBRID: Center camera on location
+			 void _centerCameraOnLocation(UniversalLatLng location) {
+			   if (_currentMapProvider == MapProvider.googleMaps && _googleMapController != null) {
+				 _googleMapController!.animateCamera(
+				   gmaps.CameraUpdate.newCameraPosition(
+					 gmaps.CameraPosition(
+					   target: location.toGoogleMaps(),
+					   zoom: 17,
+					   bearing: 0,
+					   tilt: 0,
+					 ),
+				   ),
+				 );
+			   } else if (_currentMapProvider == MapProvider.openStreetMap && _osmMapController != null) {
+				 _osmMapController!.move(location.toOpenStreetMap(), 17.0);
+			   }
+			 }
+
+			 // GEOFENCING EVENT HANDLER (unchanged)
+			 void _handleGeofenceEvent(GeofenceEvent event) {
+			   if (event.eventType == GeofenceEventType.enter && mounted) {
+				 _showViberStyleAlert(event);
+			   }
+			 }
+
+			 Future<void> _showRegularWakeNotification(GeofenceEvent event) async {
+			   try {
+				 await _createWakeScreenNotificationChannel();
+
+				 final androidDetails = AndroidNotificationDetails(
+				   'geofence_wake_channel',
+				   'Geofence Wake Alerts',
+				   channelDescription: 'Location alerts that wake the screen',
+				   importance: Importance.max,
+				   priority: Priority.max,
+				   fullScreenIntent: true,
+				   category: AndroidNotificationCategory.alarm,
+				   visibility: NotificationVisibility.public,
+				   showWhen: true,
+				   when: DateTime.now().millisecondsSinceEpoch,
+				   autoCancel: true,
+				   enableLights: true,
+				   ledColor: const Color.fromARGB(255, 0, 255, 0),
+				   ledOnMs: 1000,
+				   ledOffMs: 500,
+				   enableVibration: true,
+				   vibrationPattern: Int64List.fromList([0, 1000, 500, 1000]),
+				   playSound: true,
+				   sound: const RawResourceAndroidNotificationSound('notification'),
+				   color: const Color.fromARGB(255, 0, 255, 0),
+				   colorized: true,
+				   timeoutAfter: 20000,
+				   largeIcon: const DrawableResourceAndroidBitmap('@mipmap/ic_launcher'),
+				 );
+
+				 final platformDetails = NotificationDetails(android: androidDetails);
+				 final notificationId = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+
+				 await _flutterLocalNotificationsPlugin.show(
+				   notificationId,
+				   '🚨 LOCADO ALERT 🚨',
+				   'You are near: ${event.title ?? "a task location"}',
+				   platformDetails,
+				   payload: jsonEncode({
+					 'type': 'fullscreen_geofence',
+					 'taskId': event.taskId,
+					 'taskTitle': event.title,
+					 'geofenceId': event.geofenceId,
+				   }),
+				 );
+			   } catch (e) {
+				 print('Error showing wake notification: $e');
+			   }
+			 }
+
+			 Future<void> _createWakeScreenNotificationChannel() async {
+			   const AndroidNotificationChannel wakeChannel = AndroidNotificationChannel(
+				 'geofence_wake_channel',
+				 'Geofence Wake Alerts',
+				 description: 'Location alerts that wake the screen and appear on lock screen',
+				 importance: Importance.max,
+				 enableVibration: true,
+				 playSound: true,
+				 showBadge: true,
+				 enableLights: true,
+				 ledColor: const Color.fromARGB(255, 0, 255, 0),
+			   );
+
+			   final androidPlugin = _flutterLocalNotificationsPlugin
+				   .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>();
+
+			   if (androidPlugin != null) {
+				 await androidPlugin.createNotificationChannel(wakeChannel);
+			   }
+			 }
+
+			 Future<void> _requestLocationPermission() async {
+			   final whenInUseStatus = await Permission.locationWhenInUse.status;
+			   if (!whenInUseStatus.isGranted) {
+				 await Permission.locationWhenInUse.request();
+			   }
+
+			   final backgroundStatus = await Permission.locationAlways.status;
+			   if (!backgroundStatus.isGranted) {
+				 await Permission.locationAlways.request();
+			   }
+			 }
+
+			 // HYBRID: Load saved locations with refresh
+			 Future<void> _loadSavedLocationsWithRefresh() async {
+			   try {
+				 List<Location> locations = await DatabaseHelper.instance.getAllLocations();
+				 List<TaskLocation> taskLocations = await DatabaseHelper.instance.getAllTaskLocations();
+				 _savedLocations = taskLocations;
+
+				 // Create markers for current provider
+				 if (_currentMapProvider == MapProvider.googleMaps) {
+				   await _createGoogleMarkersWithCustomIcons(locations, taskLocations);
+				 } else {
+				   await _createOSMMarkers(locations, taskLocations);
+				 }
+
+				 setState(() {
+				   _isLoading = false;
+				 });
+
+				 // GEOFENCING AUTO-SYNC
+				 if (isGeofencingEnabled && _savedLocations.isNotEmpty) {
+				   await syncTaskLocationsFromScreen(_savedLocations);
+				 }
+
+			   } catch (e) {
+				 setState(() {
+				   _isLoading = false;
+				 });
+			   }
+			 }
+
+			 // HYBRID: Focus on updated task
+			 Future<void> _focusOnUpdatedTask(int taskId) async {
+			   try {
+				 final updatedTask = _savedLocations.firstWhere((task) => task.id == taskId);
+				 final universalLocation = UniversalLatLng(updatedTask.latitude, updatedTask.longitude);
+
+				 if (_currentMapProvider == MapProvider.googleMaps && _googleMapController != null) {
+				   await _googleMapController!.animateCamera(
+					 gmaps.CameraUpdate.newCameraPosition(
+					   gmaps.CameraPosition(
+						 target: universalLocation.toGoogleMaps(),
+						 zoom: 17.0,
+						 bearing: 0,
+						 tilt: 0,
+					   ),
+					 ),
+				   );
+				 } else if (_currentMapProvider == MapProvider.openStreetMap && _osmMapController != null) {
+				   _osmMapController!.move(universalLocation.toOpenStreetMap(), 17.0);
+				 }
+			   } catch (e) {
+				print('Error focusing on updated task: $e');
+				   }
+				 }
+
+				 void _onNotificationTapped(NotificationResponse notificationResponse) {
+				   final payload = notificationResponse.payload;
+
+				   if (payload != null && payload.startsWith('geofence_')) {
+					 final geofenceId = payload.replaceFirst('geofence_', '');
+					 // TODO: Implement navigation to task detail screen
+				   }
+				 }
+
+				 Future<void> _returnToTaskInputWithLocation(gmaps.LatLng selectedLocation, String locationName) async {
+				   if (_pendingTaskState == null) return;
+
+				   // Clear search state
+				   setState(() {
+					 if (_currentMapProvider == MapProvider.googleMaps) {
+					   _googleSearchMarkers.clear();
+					 } else {
+					   _osmSearchMarkers.clear();
+					 }
+					 _isSearchingForTaskInput = false;
+				   });
+				   await _updateMapWithSearchResults();
+
+				   // Navigate to TaskInputScreen with restored state and new location
+				   final result = await Navigator.push(
+					 context,
+					 MaterialPageRoute(
+					   builder: (ctx) => TaskInputScreenWithState(
+						 originalLocation: gmaps.LatLng(
+						   _pendingTaskState!['originalLocation']['latitude'],
+						   _pendingTaskState!['originalLocation']['longitude'],
+						 ),
+						 selectedLocation: selectedLocation,
+						 selectedLocationName: locationName,
+						 savedState: _pendingTaskState!,
+					   ),
+					 ),
+				   );
+
+				   // Clear pending state
+				   _pendingTaskState = null;
+
+				   // Handle result
+				   if (result == true) {
+					 await _loadSavedLocationsAndFocusNew();
+				   }
+				 }
+
+				 // HYBRID: Focus on new location
+				 Future<void> _focusOnNewLocation(UniversalLatLng newLocation) async {
+				   try {
+					 if (_currentMapProvider == MapProvider.googleMaps && _googleMapController != null) {
+					   await _googleMapController!.animateCamera(
+						 gmaps.CameraUpdate.newCameraPosition(
+						   gmaps.CameraPosition(
+							 target: newLocation.toGoogleMaps(),
+							 zoom: 17.0, // Close zoom to see the new location clearly
+							 bearing: 0,
+							 tilt: 0,
+						   ),
+						 ),
+					   );
+					 } else if (_currentMapProvider == MapProvider.openStreetMap && _osmMapController != null) {
+					   _osmMapController!.move(newLocation.toOpenStreetMap(), 17.0);
+					 }
+				   } catch (e) {
+					 print('Error focusing on new location: $e');
+				   }
+				 }
+
+				 /// Optimized version - uses cached location (MUCH FASTER!)
+				 Future<List<TaskWithDistance>> _sortTasksByDistanceWithDetails(List<TaskLocation> tasks) async {
+				   print('🔍 SORT DEBUG: Starting sorting for ${tasks.length} tasks');
+
+				   // ALWAYS get fresh location - user is moving!
+				   print('🔍 SORT DEBUG: Getting fresh location...');
+				   final apiPosition = await LocationService.getCurrentLocation();
+				   print('🔍 SORT DEBUG: Fresh location = $apiPosition');
+
+				   if (apiPosition == null) {
+					 print('❌ SORT DEBUG: No fresh location! Returning all with 0.0 distance');
+					 return tasks.map((task) => TaskWithDistance(task, 0.0)).toList();
+				   }
+
+				   final currentPosition = UniversalLatLng(apiPosition.latitude, apiPosition.longitude);
+				   print('✅ SORT DEBUG: Using fresh location (lat: ${currentPosition.latitude}, lng: ${currentPosition.longitude})');
+
+				   // Use fresh location for calculations
+				   List<TaskWithDistance> tasksWithDistance = [];
+
+				   for (int i = 0; i < tasks.length && i < 3; i++) {  // Debug only first 3 tasks
+					 final task = tasks[i];
+					 final distance = _calculateDistance(
+					   currentPosition.latitude,
+					   currentPosition.longitude,
+					   task.latitude,
+					   task.longitude,
+					 );
+
+					 print('🔍 SORT DEBUG: Task "${task.title}" (lat: ${task.latitude}, lng: ${task.longitude}) -> Distance = ${distance}m');
+					 tasksWithDistance.add(TaskWithDistance(task, distance));
+				   }
+
+				   // Add rest of tasks without debug
+				   for (int i = 3; i < tasks.length; i++) {
+					 final task = tasks[i];
+					 final distance = _calculateDistance(
+					   currentPosition.latitude,
+					   currentPosition.longitude,
+					   task.latitude,
+					   task.longitude,
+					 );
+					 tasksWithDistance.add(TaskWithDistance(task, distance));
+				   }
+
+				   tasksWithDistance.sort((a, b) => a.distance.compareTo(b.distance));
+				   print('✅ SORT DEBUG: Sorting completed, first task = ${tasksWithDistance.first.distance}m');
+				   return tasksWithDistance;
+				 }
+
+				 void _showCalendar() async {
+				   try {
+					 // Navigate to CalendarScreen
+					 final result = await Navigator.push(
+					   context,
+					   MaterialPageRoute(
+						 builder: (ctx) => const CalendarScreen(),
+					   ),
+					 );
+
+					 // Refresh data if needed (for future functionality)
+					 if (result == true) {
+					   await _fastLoadBasicLocations();
+					 }
+
+				   } catch (e) {
+					 ScaffoldMessenger.of(context).showSnackBar(
+					   SnackBar(
+						 content: Row(
+						   children: [
+							 const Icon(Icons.error, color: Colors.white),
+							 const SizedBox(width: 8),
+							 Expanded(
+							   child: Text('Error opening calendar: $e'),
+							 ),
+						   ],
+						 ),
+						 backgroundColor: Colors.red,
+						 duration: const Duration(seconds: 3),
+					   ),
+					 );
+				   }
+				 }
+
+				 // Sort tasks by distance from current location
+				 Future<List<TaskLocation>> _sortTasksByDistance(List<TaskLocation> tasks) async {
+				   try {
+					 // Try to get current location
+					 final currentPosition = await LocationService.getCurrentLocation();
+
+					 if (currentPosition == null) {
+					   // If no location, return original order
+					   return tasks;
+					 }
+
+					 // Create list with distances
+					 List<TaskWithDistance> tasksWithDistance = [];
+
+					 for (final task in tasks) {
+					   final distance = _calculateDistance(
+						 currentPosition.latitude,
+						 currentPosition.longitude,
+						 task.latitude,
+						 task.longitude,
+					   );
+
+					   tasksWithDistance.add(TaskWithDistance(task, distance));
+					 }
+
+					 // Sort by distance (closest first)
+					 tasksWithDistance.sort((a, b) => a.distance.compareTo(b.distance));
+
+					 // Return only tasks
+					 final sortedTasks = tasksWithDistance.map((twd) => twd.task).toList();
+
+					 return sortedTasks;
+
+				   } catch (e) {
+					 return tasks; // Fallback to original order
+				   }
+				 }
+
+				 /// Start location tracking for auto focus functionality
+				 Future<void> _startLocationTracking() async {
+				   if (_isTrackingLocation) return;
+
+				   try {
+					 bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+					 if (!serviceEnabled) {
+					   debugPrint('❌ Location services are disabled');
+					   return;
+					 }
+
+					 LocationPermission permission = await Geolocator.checkPermission();
+					 if (permission == LocationPermission.denied) {
+					   permission = await Geolocator.requestPermission();
+					   if (permission == LocationPermission.denied) {
+						 debugPrint('❌ Location permissions are denied');
+						 return;
+					   }
+					 }
+
+					 if (permission == LocationPermission.deniedForever) {
+					   debugPrint('❌ Location permissions are permanently denied');
+					   return;
+					 }
+
+					 _isTrackingLocation = true;
+					 debugPrint('✅ Auto focus location tracking started');
+
+					 // Configuration for location stream
+					 const LocationSettings locationSettings = LocationSettings(
+					   accuracy: LocationAccuracy.high,
+					   distanceFilter: 10, // Update every 10 meters
+					 );
+
+					 _positionStream = Geolocator.getPositionStream(
+					   locationSettings: locationSettings,
+					 ).listen(
+						   (Position position) {
+						 _handleLocationUpdate(position);
+					   },
+					   onError: (error) {
+						 debugPrint('❌ Location stream error: $error');
+						 _stopLocationTracking();
+					   },
+					 );
+
+				   } catch (e) {
+					 debugPrint('❌ Error starting location tracking: $e');
+					 _isTrackingLocation = false;
+				   }
+				 }
+
+				 /// Stop location tracking
+				 void _stopLocationTracking() {
+				   if (!_isTrackingLocation) return;
+
+				   try {
+					 _positionStream?.cancel();
+					 _positionStream = null;
+					 _isTrackingLocation = false;
+					 debugPrint('🛑 Auto focus location tracking stopped');
+				   } catch (e) {
+					 debugPrint('❌ Error stopping location tracking: $e');
+				   }
+				 }
+
+				 /// Handle location updates for auto focus (HYBRID)
+				 void _handleLocationUpdate(Position position) {
+				   if (_isManuallyFocusing) {
+					 print('⏸️ LOCATION UPDATE: Skipping because manually focusing on task');
+					 return;
+				   }
+
+				   print('🔍 LOCATION UPDATE: Received position = lat: ${position.latitude}, lng: ${position.longitude}');
+				   print('🔍 LOCATION UPDATE: _autoFocusEnabled = $_autoFocusEnabled');
+				   print('🔍 LOCATION UPDATE: _isMapReady = $_isMapReady');
+				   print('🔍 LOCATION UPDATE: Map controller available = ${(_currentMapProvider == MapProvider.googleMaps ? _googleMapController != null : _osmMapController != null)}');
+
+				   if (!_autoFocusEnabled || !_isMapReady) {
+					 print('❌ LOCATION UPDATE: Exiting due to conditions - won\'t update _currentLocation!');
+					 return;
+				   }
+
+				   try {
+					 final newLocation = UniversalLatLng(position.latitude, position.longitude);
+					 print('🔍 LOCATION UPDATE: New location = $newLocation');
+					 print('🔍 LOCATION UPDATE: Old _currentLocation = $_currentLocation');
+
+					 // Update map only if user has moved significantly
+					 if (_currentLocation == null ||
+						 _calculateDistance(
+							 _currentLocation!.latitude,
+							 _currentLocation!.longitude,
+							 newLocation.latitude,
+							 newLocation.longitude
+						 ) > 20) { // 20 meters threshold
+
+					   print('✅ LOCATION UPDATE: Setting _currentLocation = $newLocation');
+					   _currentLocation = newLocation;
+
+					   // HYBRID: Animate camera to new location based on provider
+					   if (_currentMapProvider == MapProvider.googleMaps && _googleMapController != null) {
+						 _googleMapController!.animateCamera(
+						   gmaps.CameraUpdate.newCameraPosition(
+							 gmaps.CameraPosition(
+							   target: newLocation.toGoogleMaps(),
+							   zoom: 16.0, // Optimal zoom for tracking
+							   bearing: position.heading, // Follow movement direction
+							   tilt: 30.0, // Slight tilt for better tracking
+							 ),
+						   ),
+						 );
+					   } else if (_currentMapProvider == MapProvider.openStreetMap && _osmMapController != null) {
+						 _osmMapController!.move(newLocation.toOpenStreetMap(), 16.0);
+					   }
+
+					   print('✅ LOCATION UPDATE: Camera updated');
+					 } else {
+					   print('⏭️ LOCATION UPDATE: Too small distance change, not updating');
+					 }
+				   } catch (e) {
+					 print('❌ LOCATION UPDATE Error: $e');
+				   }
+				 }
+
+				 // HYBRID: Update map with search results
+				 Future<void> _updateMapWithSearchResults() async {
+				   if (_currentMapProvider == MapProvider.googleMaps) {
+					 Set<gmaps.Marker> allMarkers = Set.from(_googleMarkers);
+
+					 // Remove old search markers
+					 allMarkers.removeWhere((marker) => marker.markerId.value.startsWith('search_'));
+
+					 // Add new search markers
+					 allMarkers.addAll(_googleSearchMarkers);
+
+					 setState(() {
+					   _googleMarkers = allMarkers;
+					 });
+				   } else {
+					 Set<OSMMarker> allMarkers = Set.from(_osmMarkers);
+
+					 // Remove old search markers
+					 allMarkers.removeWhere((marker) => marker.markerId.startsWith('search_'));
+
+					 // Add new search markers
+					 allMarkers.addAll(_osmSearchMarkers);
+
+					 setState(() {
+					   _osmMarkers = allMarkers;
+					 });
+				   }
+				 }
+
+				 Future<void> _returnToTaskDetailWithLocation(gmaps.LatLng selectedLocation, String locationName) async {
+				   if (_pendingTaskState == null) return;
+
+				   // Clear search state
+				   setState(() {
+					 if (_currentMapProvider == MapProvider.googleMaps) {
+					   _googleSearchMarkers.clear();
+					 } else {
+					   _osmSearchMarkers.clear();
+					 }
+					 _isSearchingForTaskInput = false;
+				   });
+				   await _updateMapWithSearchResults();
+
+				   // Store the pending state before clearing it
+				   final currentPendingState = _pendingTaskState!;
+				   _pendingTaskState = null; // Clear immediately after storing
+
+				   // Navigate to TaskDetailScreenWithState with restored state and new location
+				   final result = await Navigator.push(
+					 context,
+					 MaterialPageRoute(
+					   builder: (ctx) => TaskDetailScreenWithState(
+						 taskLocation: _createTaskLocationFromState(currentPendingState!),
+						 selectedLocation: selectedLocation,
+						 selectedLocationName: locationName,
+						 savedState: currentPendingState!,
+					   ),
+					 ),
+				   );
+
+				   // Clear pending state
+				   _pendingTaskState = null;
+
+				   // Handle result
+				   if (result != null) {
+					 if (result == true) {
+					   await _loadSavedLocationsWithRefresh();
+					 } else if (result is Map && result['refresh'] == true) {
+					   await _loadSavedLocationsWithRefresh();
+					   if (result['focusLocation'] != null) {
+						 await _focusOnNewLocation(UniversalLatLng.fromGoogleMaps(result['focusLocation'] as gmaps.LatLng));
+					   }
+					 }
+				   }
+				 }
+
+				 // Helper method to create TaskLocation from saved state:
+				 TaskLocation _createTaskLocationFromState(Map<String, dynamic> state) {
+				   DateTime? scheduledDateTime;
+				   if (state['scheduledDate'] != null && state['scheduledTime'] != null) {
+					 final date = DateTime.parse(state['scheduledDate']);
+					 final timeData = state['scheduledTime'];
+					 scheduledDateTime = DateTime(
+					   date.year,
+					   date.month,
+					   date.day,
+					   timeData['hour'],
+					   timeData['minute'],
+					 );
+				   }
+
+				   return TaskLocation(
+					 id: state['taskId'],
+					 latitude: state['originalLocation']['latitude'],
+					 longitude: state['originalLocation']['longitude'],
+					 title: state['title'] ?? '',
+					 taskItems: List<String>.from(state['items'] ?? []),
+					 colorHex: '#${(state['selectedColor'] ?? Colors.teal.value).toRadixString(16).substring(2)}',
+					 scheduledDateTime: scheduledDateTime,
+					 linkedCalendarEventId: state['linkedCalendarEventId'],
+				   );
+				 }
+
+				 Future<void> _performInitialLocationFocus() async {
+				   try {
+					 // Wait for map to be ready
+					 int waitAttempts = 0;
+					 while (!_isMapReady && waitAttempts < 30) {
+					   await Future.delayed(const Duration(milliseconds: 100));
+					   waitAttempts++;
+					 }
+
+					 if (!_isMapReady) {
+					   print('Map not ready for initial focus');
+					   return;
+					 }
+
+					 // Get current location using existing service
+					 final position = await LocationService.getCurrentLocation();
+
+					 if (position != null) {
+					   final userLocation = UniversalLatLng(position.latitude, position.longitude);
+
+					   // Update current location variable
+					   _currentLocation = userLocation;
+
+					   // HYBRID: Focus camera on user location
+					   if (_currentMapProvider == MapProvider.googleMaps && _googleMapController != null) {
+						 await _googleMapController!.animateCamera(
+						   gmaps.CameraUpdate.newCameraPosition(
+							 gmaps.CameraPosition(
+							   target: userLocation.toGoogleMaps(),
+							   zoom: 16.0,
+							   bearing: 0,
+							   tilt: 0,
+							 ),
+						   ),
+						 );
+					   } else if (_currentMapProvider == MapProvider.openStreetMap && _osmMapController != null) {
+						 _osmMapController!.move(userLocation.toOpenStreetMap(), 16.0);
+					   }
+
+					   print('Initial camera focused on user location');
+
+					 } else {
+					   print('Could not get initial location, keeping default');
+					 }
+
+				   } catch (e) {
+					 print('Error during initial location focus: $e');
+				   }
+				 }
+
+				 // PUBLIC METHODS for MainNavigationScreen communication (HYBRID)
+				 Future<void> performSearch(String searchTerm) async {
+				   if (searchTerm.trim().isEmpty) {
+					 ScaffoldMessenger.of(context).showSnackBar(
+					   const SnackBar(
+						 content: Text('Please enter a search term'),
+						 backgroundColor: Colors.orange,
+					   ),
+					 );
+					 return;
+				   }
+
+				   try {
+					 UniversalLatLng searchCenter = UniversalLatLng(48.2082, 16.3738); // Default Vienna
+					 if (_currentLocation != null) {
+					   searchCenter = _currentLocation!;
+					 }
+
+					 final url = 'https://maps.googleapis.com/maps/api/place/nearbysearch/json'
+						 '?location=${searchCenter.latitude},${searchCenter.longitude}'
+						 '&radius=5000'
+						 '&keyword=${Uri.encodeComponent(searchTerm)}'
+						 '&key=$googleApiKey';
+
+					 final response = await http.get(Uri.parse(url));
+
+					 if (response.statusCode == 200) {
+					   final body = json.decode(response.body);
+					   final List results = body['results'];
+
+					   // HYBRID: Create search markers for current provider
+					   if (_currentMapProvider == MapProvider.googleMaps) {
+						 Set<gmaps.Marker> searchMarkers = {};
+
+						 for (final place in results) {
+						   final lat = place['geometry']['location']['lat'];
+						   final lng = place['geometry']['location']['lng'];
+						   final name = place['name'];
+
+						   searchMarkers.add(
+							 gmaps.Marker(
+							   markerId: gmaps.MarkerId('search_${place['place_id']}'),
+							   position: gmaps.LatLng(lat, lng),
+							   icon: gmaps.BitmapDescriptor.defaultMarkerWithHue(gmaps.BitmapDescriptor.hueRed),
+							   infoWindow: gmaps.InfoWindow(
+								 title: name,
+								 snippet: 'Tap to create task here',
+							   ),
+							   onTap: () async {
+								 setState(() {
+								   _googleSearchMarkers.clear();
+								 });
+								 await _updateMapWithSearchResults();
+
+								 final result = await Navigator.push(
+								   context,
+								   MaterialPageRoute(
+									 builder: (ctx) => TaskInputScreen(
+									   location: gmaps.LatLng(lat, lng),
+									   locationName: name,
+									 ),
+								   ),
+								 );
+
+								 if (result == true) {
+								   await _loadSavedLocationsAndFocusNew();
+								 }
+							   },
+							 ),
+						   );
+						 }
+
+						 setState(() {
+						   _googleSearchMarkers = searchMarkers;
+						 });
+
+						 await _updateMapWithSearchResults();
+
+						 if (_googleMapController != null && results.isNotEmpty) {
+						   _googleMapController!.animateCamera(
+							 gmaps.CameraUpdate.newLatLngZoom(searchCenter.toGoogleMaps(), 14),
+						   );
+						 }
+					   } else {
+						 // OSM search markers
+						 Set<OSMMarker> searchMarkers = {};
+
+						 for (final place in results) {
+						   final lat = place['geometry']['location']['lat'];
+						   final lng = place['geometry']['location']['lng'];
+						   final name = place['name'];
+
+						   searchMarkers.add(
+							 OSMMarker(
+							   markerId: 'search_${place['place_id']}',
+							   position: ll.LatLng(lat, lng),
+							   title: name,
+							   child: OSMConverter.createDefaultMarker(color: Colors.red),
+							   onTap: () async {
+								 setState(() {
+								   _osmSearchMarkers.clear();
+								 });
+								 await _updateMapWithSearchResults();
+
+								 final result = await Navigator.push(
+								   context,
+								   MaterialPageRoute(
+									 builder: (ctx) => TaskInputScreen(
+									   location: gmaps.LatLng(lat, lng),
+									   locationName: name,
+									 ),
+								   ),
+								 );
+
+								 if (result == true) {
+								   await _loadSavedLocationsAndFocusNew();
+								 }
+							   },
+							 ),
+						   );
+						 }
+
+						 setState(() {
+						   _osmSearchMarkers = searchMarkers;
+						 });
+
+						 await _updateMapWithSearchResults();
+
+						 if (_osmMapController != null && results.isNotEmpty) {
+						   _osmMapController!.move(searchCenter.toOpenStreetMap(), 14);
+						 }
+					   }
+
+					   ScaffoldMessenger.of(context).showSnackBar(
+						 SnackBar(
+						   content: Text(
+							 results.isEmpty
+								 ? 'No locations found for "$searchTerm"'
+								 : 'Found ${results.length} locations',
+						   ),
+						   backgroundColor: results.isEmpty ? Colors.blue : Colors.green,
+						 ),
+					   );
+
+					 } else {
+					   ScaffoldMessenger.of(context).showSnackBar(
+						 const SnackBar(
+						   content: Text('Failed to search locations'),
+						   backgroundColor: Colors.red,
+						 ),
+					   );
+					 }
+
+				   } catch (e) {
+					 ScaffoldMessenger.of(context).showSnackBar(
+					   SnackBar(
+						 content: Text('Search error: $e'),
+						 backgroundColor: Colors.red,
+					   ),
+					 );
+				   }
+				 }
+
+				 // HYBRID: Focus on task location
+				 Future<void> _focusOnTaskLocation(TaskLocation task) async {
+				   try {
+					 final universalLocation = UniversalLatLng(task.latitude, task.longitude);
+					 
+					 if (_currentMapProvider == MapProvider.googleMaps && _googleMapController != null) {
+					   await _googleMapController!.animateCamera(
+						 gmaps.CameraUpdate.newCameraPosition(
+						   gmaps.CameraPosition(
+							 target: universalLocation.toGoogleMaps(),
+							 zoom: 17.0,
+							 bearing: 0,
+							 tilt: 0,
+						   ),
+						 ),
+					   );
+					 } else if (_currentMapProvider == MapProvider.openStreetMap && _osmMapController != null) {
+					   _osmMapController!.move(universalLocation.toOpenStreetMap(), 17.0);
+					 }
+
+					 // Send confirmation to user
+					 ScaffoldMessenger.of(context).showSnackBar(
+					   SnackBar(
+						 content: Row(
+						   children: [
+							 const Icon(Icons.location_on, color: Colors.white),
+							 const SizedBox(width: 8),
+							 Expanded(
+							   child: Text('Focused on: ${task.title}'),
+							 ),
+						   ],
+						 ),
+						 backgroundColor: Colors.green,
+						 duration: const Duration(seconds: 2),
+					   ),
+					 );
+				   } catch (e) {
+					 // Silent fail in production
+				   }
+				 }
+
+				 // PUBLIC wrapper for MainNavigationScreen communication (HYBRID)
+				 Future<void> focusOnTaskLocation(TaskLocation task) async {
+				   print('🗺️ MAP FOCUS DEBUG: Starting focus on task: ${task.title}');
+				   print('🗺️ MAP FOCUS DEBUG: Task coordinates: ${task.latitude}, ${task.longitude}');
+				   print('🗺️ MAP FOCUS DEBUG: Current provider: ${_currentMapProvider.name}');
+
+				   try {
+					 final universalLocation = UniversalLatLng(task.latitude, task.longitude);
+					 bool hasController = (_currentMapProvider == MapProvider.googleMaps ? _googleMapController != null : _osmMapController != null);
+					 
+					 if (hasController && _isMapReady) {
+					   // SET FLAG TO PREVENT AUTO FOCUS
+					   _isManuallyFocusing = true;
+					   print('🗺️ MAP FOCUS DEBUG: Set manual focusing flag = true');
+
+					   print('🗺️ MAP FOCUS DEBUG: Animating camera to task location');
+
+					   if (_currentMapProvider == MapProvider.googleMaps) {
+						 await _googleMapController!.animateCamera(
+						   gmaps.CameraUpdate.newCameraPosition(
+							 gmaps.CameraPosition(
+							   target: universalLocation.toGoogleMaps(),
+							   zoom: 18.0,
+							   bearing: 0,
+							   tilt: 45.0,
+							 ),
+						   ),
+						 );
+					   } else {
+						 _osmMapController!.move(universalLocation.toOpenStreetMap(), 18.0);
+					   }
+
+					   print('✅ MAP FOCUS DEBUG: Camera animation completed');
+
+					   // Snackbar confirmation
+					   if (mounted) {
+						 ScaffoldMessenger.of(context).showSnackBar(
+						   SnackBar(
+							 content: Row(
+							   children: [
+								 const Icon(Icons.location_on, color: Colors.white),
+								 const SizedBox(width: 8),
+								 Expanded(
+								   child: Text('Focused on: ${task.title}'),
+								 ),
+							   ],
+							 ),
+							 backgroundColor: Colors.green,
+							 duration: const Duration(seconds: 5), // Increased to 5 seconds
+						   ),
+						 );
+					   }
+
+					   // WAIT 5 SECONDS THEN REMOVE FLAG
+					   Future.delayed(const Duration(seconds: 5), () {
+						 print('🗺️ MAP FOCUS DEBUG: Clearing manual focusing flag');
+						 _isManuallyFocusing = false;
+					   });
+
+					 } else {
+					   print('❌ MAP FOCUS DEBUG: Map controller not ready!');
+					 }
+				   } catch (e) {
+					 print('❌ MAP FOCUS DEBUG: Error during camera animation: $e');
+					 _isManuallyFocusing = false; // Remove flag in case of error
+				   }
+				 }
+
+				 @override
+				 void dispose() {
+				   WidgetsBinding.instance.removeObserver(this);
+				   _pulseController.dispose();
+				   _positionStream?.cancel();
+				   super.dispose();
+				 }
+				}
