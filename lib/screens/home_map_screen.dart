@@ -2009,33 +2009,88 @@ class _HomeMapScreenState extends State<HomeMapScreen>
 				 }
 
 				 // HYBRID: Update map with search results
-				 Future<void> _updateMapWithSearchResults() async {
-				   if (_currentMapProvider == MapProvider.googleMaps) {
-					 Set<gmaps.Marker> allMarkers = Set.from(_googleMarkers);
+				// DEBUG VERSION: Update map with search results - HYBRID support
+				Future<void> _updateMapWithSearchResults() async {
+				  print('🔍 UPDATE MARKERS DEBUG: Starting update for ${_currentMapProvider.name}');
+				  
+				  if (_currentMapProvider == MapProvider.googleMaps) {
+					print('🔍 UPDATE MARKERS: Google Maps - Before: ${_googleMarkers.length} markers');
+					print('🔍 UPDATE MARKERS: Google Maps - Adding: ${_googleSearchMarkers.length} search markers');
+					
+					Set<gmaps.Marker> allMarkers = Set.from(_googleMarkers);
 
-					 // Remove old search markers
-					 allMarkers.removeWhere((marker) => marker.markerId.value.startsWith('search_'));
+					// Remove old search markers
+					int removedCount = 0;
+					allMarkers.removeWhere((marker) {
+					  bool shouldRemove = marker.markerId.value.startsWith('search_');
+					  if (shouldRemove) removedCount++;
+					  return shouldRemove;
+					});
+					
+					print('🔍 UPDATE MARKERS: Google Maps - Removed ${removedCount} old search markers');
 
-					 // Add new search markers
-					 allMarkers.addAll(_googleSearchMarkers);
+					// Add new search markers
+					allMarkers.addAll(_googleSearchMarkers);
 
-					 setState(() {
-					   _googleMarkers = allMarkers;
-					 });
-				   } else {
-					 Set<OSMMarker> allMarkers = Set.from(_osmMarkers);
+					print('🔍 UPDATE MARKERS: Google Maps - After: ${allMarkers.length} total markers');
 
-					 // Remove old search markers
-					 allMarkers.removeWhere((marker) => marker.markerId.startsWith('search_'));
+					setState(() {
+					  _googleMarkers = allMarkers;
+					});
+					
+					print('🔍 UPDATE MARKERS: Google Maps - State updated with ${_googleMarkers.length} markers');
+					
+				  } else {
+					print('🔍 UPDATE MARKERS: OSM - Before: ${_osmMarkers.length} markers');
+					print('🔍 UPDATE MARKERS: OSM - Adding: ${_osmSearchMarkers.length} search markers');
+					
+					// Debug current OSM markers
+					print('🔍 UPDATE MARKERS: OSM - Current marker IDs:');
+					for (final marker in _osmMarkers) {
+					  print('  - ${marker.markerId}');
+					}
+					
+					// Debug search markers
+					print('🔍 UPDATE MARKERS: OSM - Search marker IDs:');
+					for (final marker in _osmSearchMarkers) {
+					  print('  - ${marker.markerId} at ${marker.position}');
+					}
+					
+					Set<OSMMarker> allMarkers = Set.from(_osmMarkers);
 
-					 // Add new search markers
-					 allMarkers.addAll(_osmSearchMarkers);
+					// Remove old search markers
+					int removedCount = 0;
+					allMarkers.removeWhere((marker) {
+					  bool shouldRemove = marker.markerId.startsWith('search_');
+					  if (shouldRemove) {
+						removedCount++;
+						print('🔍 UPDATE MARKERS: OSM - Removing old search marker: ${marker.markerId}');
+					  }
+					  return shouldRemove;
+					});
+					
+					print('🔍 UPDATE MARKERS: OSM - Removed ${removedCount} old search markers');
 
-					 setState(() {
-					   _osmMarkers = allMarkers;
-					 });
-				   }
-				 }
+					// Add new search markers
+					allMarkers.addAll(_osmSearchMarkers);
+
+					print('🔍 UPDATE MARKERS: OSM - After: ${allMarkers.length} total markers');
+					
+					// Debug final markers
+					print('🔍 UPDATE MARKERS: OSM - Final marker IDs:');
+					for (final marker in allMarkers) {
+					  print('  - ${marker.markerId} at ${marker.position}');
+					}
+
+					setState(() {
+					  _osmMarkers = allMarkers;
+					});
+					
+					print('🔍 UPDATE MARKERS: OSM - State updated with ${_osmMarkers.length} markers');
+				  }
+				  
+				  print('🔍 UPDATE MARKERS DEBUG: Update completed');
+				}
 
 				 Future<void> _returnToTaskDetailWithLocation(gmaps.LatLng selectedLocation, String locationName) async {
 				   if (_pendingTaskState == null) return;
@@ -2163,166 +2218,38 @@ class _HomeMapScreenState extends State<HomeMapScreen>
 
 				 // PUBLIC METHODS for MainNavigationScreen communication (HYBRID)
 				 Future<void> performSearch(String searchTerm) async {
-				   if (searchTerm.trim().isEmpty) {
-					 ScaffoldMessenger.of(context).showSnackBar(
-					   const SnackBar(
-						 content: Text('Please enter a search term'),
-						 backgroundColor: Colors.orange,
-					   ),
-					 );
-					 return;
-				   }
+				  if (searchTerm.trim().isEmpty) {
+					ScaffoldMessenger.of(context).showSnackBar(
+					  const SnackBar(
+						content: Text('Please enter a search term'),
+						backgroundColor: Colors.orange,
+					  ),
+					);
+					return;
+				  }
 
-				   try {
-					 UniversalLatLng searchCenter = UniversalLatLng(48.2082, 16.3738); // Default Vienna
-					 if (_currentLocation != null) {
-					   searchCenter = _currentLocation!;
-					 }
+				  try {
+					UniversalLatLng searchCenter = UniversalLatLng(48.2082, 16.3738); // Default Vienna
+					if (_currentLocation != null) {
+					  searchCenter = _currentLocation!;
+					}
 
-					 final url = 'https://maps.googleapis.com/maps/api/place/nearbysearch/json'
-						 '?location=${searchCenter.latitude},${searchCenter.longitude}'
-						 '&radius=5000'
-						 '&keyword=${Uri.encodeComponent(searchTerm)}'
-						 '&key=$googleApiKey';
+					// HYBRID: Choose API based on current map provider
+					if (_currentMapProvider == MapProvider.googleMaps) {
+					  await _performGooglePlacesSearch(searchTerm, searchCenter);
+					} else {
+					  await _performNominatimSearch(searchTerm, searchCenter);
+					}
 
-					 final response = await http.get(Uri.parse(url));
-
-					 if (response.statusCode == 200) {
-					   final body = json.decode(response.body);
-					   final List results = body['results'];
-
-					   // HYBRID: Create search markers for current provider
-					   if (_currentMapProvider == MapProvider.googleMaps) {
-						 Set<gmaps.Marker> searchMarkers = {};
-
-						 for (final place in results) {
-						   final lat = place['geometry']['location']['lat'];
-						   final lng = place['geometry']['location']['lng'];
-						   final name = place['name'];
-
-						   searchMarkers.add(
-							 gmaps.Marker(
-							   markerId: gmaps.MarkerId('search_${place['place_id']}'),
-							   position: gmaps.LatLng(lat, lng),
-							   icon: gmaps.BitmapDescriptor.defaultMarkerWithHue(gmaps.BitmapDescriptor.hueRed),
-							   infoWindow: gmaps.InfoWindow(
-								 title: name,
-								 snippet: 'Tap to create task here',
-							   ),
-							   onTap: () async {
-								 setState(() {
-								   _googleSearchMarkers.clear();
-								 });
-								 await _updateMapWithSearchResults();
-
-								 final result = await Navigator.push(
-								   context,
-								   MaterialPageRoute(
-									 builder: (ctx) => TaskInputScreen(
-									   location: gmaps.LatLng(lat, lng),
-									   locationName: name,
-									 ),
-								   ),
-								 );
-
-								 if (result == true) {
-								   await _loadSavedLocationsAndFocusNew();
-								 }
-							   },
-							 ),
-						   );
-						 }
-
-						 setState(() {
-						   _googleSearchMarkers = searchMarkers;
-						 });
-
-						 await _updateMapWithSearchResults();
-
-						 if (_googleMapController != null && results.isNotEmpty) {
-						   _googleMapController!.animateCamera(
-							 gmaps.CameraUpdate.newLatLngZoom(searchCenter.toGoogleMaps(), 14),
-						   );
-						 }
-					   } else {
-						 // OSM search markers
-						 Set<OSMMarker> searchMarkers = {};
-
-						 for (final place in results) {
-						   final lat = place['geometry']['location']['lat'];
-						   final lng = place['geometry']['location']['lng'];
-						   final name = place['name'];
-
-						   searchMarkers.add(
-							 OSMMarker(
-							   markerId: 'search_${place['place_id']}',
-							   position: ll.LatLng(lat, lng),
-							   title: name,
-							   child: OSMConverter.createDefaultMarker(color: Colors.red),
-							   onTap: () async {
-								 setState(() {
-								   _osmSearchMarkers.clear();
-								 });
-								 await _updateMapWithSearchResults();
-
-								 final result = await Navigator.push(
-								   context,
-								   MaterialPageRoute(
-									 builder: (ctx) => TaskInputScreen(
-									   location: gmaps.LatLng(lat, lng),
-									   locationName: name,
-									 ),
-								   ),
-								 );
-
-								 if (result == true) {
-								   await _loadSavedLocationsAndFocusNew();
-								 }
-							   },
-							 ),
-						   );
-						 }
-
-						 setState(() {
-						   _osmSearchMarkers = searchMarkers;
-						 });
-
-						 await _updateMapWithSearchResults();
-
-						 if (_osmMapController != null && results.isNotEmpty) {
-						   _osmMapController!.move(searchCenter.toOpenStreetMap(), 14);
-						 }
-					   }
-
-					   ScaffoldMessenger.of(context).showSnackBar(
-						 SnackBar(
-						   content: Text(
-							 results.isEmpty
-								 ? 'No locations found for "$searchTerm"'
-								 : 'Found ${results.length} locations',
-						   ),
-						   backgroundColor: results.isEmpty ? Colors.blue : Colors.green,
-						 ),
-					   );
-
-					 } else {
-					   ScaffoldMessenger.of(context).showSnackBar(
-						 const SnackBar(
-						   content: Text('Failed to search locations'),
-						   backgroundColor: Colors.red,
-						 ),
-					   );
-					 }
-
-				   } catch (e) {
-					 ScaffoldMessenger.of(context).showSnackBar(
-					   SnackBar(
-						 content: Text('Search error: $e'),
-						 backgroundColor: Colors.red,
-					   ),
-					 );
-				   }
-				 }
+				  } catch (e) {
+					ScaffoldMessenger.of(context).showSnackBar(
+					  SnackBar(
+						content: Text('Search error: $e'),
+						backgroundColor: Colors.red,
+					  ),
+					);
+				  }
+				}
 
 				 // HYBRID: Focus on task location
 				 Future<void> _focusOnTaskLocation(TaskLocation task) async {
@@ -2432,6 +2359,40 @@ class _HomeMapScreenState extends State<HomeMapScreen>
 					 _isManuallyFocusing = false; // Remove flag in case of error
 				   }
 				 }
+				 
+				 // Helper method to extract the best name from Nominatim result
+					String _extractBestName(Map<String, dynamic> place) {
+					  // Try different name fields in order of preference
+					  if (place['namedetails'] != null) {
+						final nameDetails = place['namedetails'];
+						if (nameDetails['name:en'] != null) return nameDetails['name:en'];
+						if (nameDetails['name'] != null) return nameDetails['name'];
+					  }
+					  
+					  if (place['name'] != null && place['name'].toString().isNotEmpty) {
+						return place['name'];
+					  }
+					  
+					  // Fallback to first part of display_name
+					  final displayName = place['display_name'] ?? '';
+					  final parts = displayName.split(',');
+					  return parts.isNotEmpty ? parts.first.trim() : 'Unknown Location';
+					}
+
+					// Helper method to create distance-based marker colors
+					Widget _createDistanceMarker(double distanceInMeters) {
+					  Color markerColor;
+					  
+					  if (distanceInMeters <= 500) {
+						markerColor = Colors.green; // Very close
+					  } else if (distanceInMeters <= 1000) {
+						markerColor = Colors.orange; // Nearby
+					  } else {
+						markerColor = Colors.red; // Far
+					  }
+					  
+					  return OSMConverter.createDefaultMarker(color: markerColor);
+					}
 
 				 @override
 				 void dispose() {
@@ -2440,4 +2401,308 @@ class _HomeMapScreenState extends State<HomeMapScreen>
 				   _positionStream?.cancel();
 				   super.dispose();
 				 }
+				 
+				 // Google Places API search (existing functionality)
+					Future<void> _performGooglePlacesSearch(String searchTerm, UniversalLatLng searchCenter) async {
+					  final url = 'https://maps.googleapis.com/maps/api/place/nearbysearch/json'
+						  '?location=${searchCenter.latitude},${searchCenter.longitude}'
+						  '&radius=5000'
+						  '&keyword=${Uri.encodeComponent(searchTerm)}'
+						  '&key=$googleApiKey';
+
+					  final response = await http.get(Uri.parse(url));
+
+					  if (response.statusCode == 200) {
+						final body = json.decode(response.body);
+						final List results = body['results'];
+
+						Set<gmaps.Marker> searchMarkers = {};
+
+						for (final place in results) {
+						  final lat = place['geometry']['location']['lat'];
+						  final lng = place['geometry']['location']['lng'];
+						  final name = place['name'];
+
+						  searchMarkers.add(
+							gmaps.Marker(
+							  markerId: gmaps.MarkerId('search_${place['place_id']}'),
+							  position: gmaps.LatLng(lat, lng),
+							  icon: gmaps.BitmapDescriptor.defaultMarkerWithHue(gmaps.BitmapDescriptor.hueRed),
+							  infoWindow: gmaps.InfoWindow(
+								title: name,
+								snippet: 'Tap to create task here',
+							  ),
+							  onTap: () async {
+								setState(() {
+								  _googleSearchMarkers.clear();
+								});
+								await _updateMapWithSearchResults();
+
+								final result = await Navigator.push(
+								  context,
+								  MaterialPageRoute(
+									builder: (ctx) => TaskInputScreen(
+									  location: gmaps.LatLng(lat, lng),
+									  locationName: name,
+									),
+								  ),
+								);
+
+								if (result == true) {
+								  await _loadSavedLocationsAndFocusNew();
+								}
+							  },
+							),
+						  );
+						}
+
+						setState(() {
+						  _googleSearchMarkers = searchMarkers;
+						});
+
+						await _updateMapWithSearchResults();
+
+						if (_googleMapController != null && results.isNotEmpty) {
+						  _googleMapController!.animateCamera(
+							gmaps.CameraUpdate.newLatLngZoom(searchCenter.toGoogleMaps(), 14),
+						  );
+						}
+
+						ScaffoldMessenger.of(context).showSnackBar(
+						  SnackBar(
+							content: Text(
+							  results.isEmpty
+								  ? 'No locations found for "$searchTerm"'
+								  : 'Found ${results.length} locations',
+							),
+							backgroundColor: results.isEmpty ? Colors.blue : Colors.green,
+						  ),
+						);
+
+					  } else {
+						ScaffoldMessenger.of(context).showSnackBar(
+						  const SnackBar(
+							content: Text('Failed to search locations'),
+							backgroundColor: Colors.red,
+						  ),
+						);
+					  }
+					}
+
+					// FIXED: Nominatim API search - back to viewbox approach with distance sorting
+					Future<void> _performNominatimSearch(String searchTerm, UniversalLatLng searchCenter) async {
+					  print('🔍 OSM SEARCH DEBUG: Starting search for "$searchTerm"');
+					  print('🔍 OSM SEARCH DEBUG: Search center = ${searchCenter.latitude}, ${searchCenter.longitude}');
+					  
+					  // HYBRID APPROACH: Use viewbox (which worked before) + distance sorting (new feature)
+					  // Create larger viewbox around Vienna/current location (approximately 20km radius)
+					  final double radiusOffset = 0.2; // ~20km in degrees
+					  final double minLon = searchCenter.longitude - radiusOffset;
+					  final double maxLat = searchCenter.latitude + radiusOffset;
+					  final double maxLon = searchCenter.longitude + radiusOffset;
+					  final double minLat = searchCenter.latitude - radiusOffset;
+					  
+					  final url = 'https://nominatim.openstreetmap.org/search'
+						  '?q=${Uri.encodeComponent(searchTerm)}'
+						  '&format=json'
+						  '&limit=20' // Get more results for distance sorting
+						  '&addressdetails=1'
+						  '&extratags=1'
+						  '&namedetails=1'
+						  // BACK TO VIEWBOX - this worked before!
+						  '&viewbox=$minLon,$maxLat,$maxLon,$minLat'
+						  '&bounded=1'; // Important: restrict to viewbox
+
+					  print('🔍 OSM SEARCH DEBUG: Request URL = $url');
+					  print('🔍 OSM SEARCH DEBUG: ViewBox = minLon:$minLon, maxLat:$maxLat, maxLon:$maxLon, minLat:$minLat');
+
+					  final response = await http.get(
+						Uri.parse(url),
+						headers: {
+						  'User-Agent': 'Locado/1.0 (Flutter App)', // Required by Nominatim
+						},
+					  );
+
+					  print('🔍 OSM SEARCH DEBUG: Response status = ${response.statusCode}');
+
+					  if (response.statusCode == 200) {
+						final List rawResults = json.decode(response.body);
+						print('🔍 OSM SEARCH DEBUG: Raw results count = ${rawResults.length}');
+
+						if (rawResults.isEmpty) {
+						  print('🔍 OSM SEARCH DEBUG: No results found within viewbox - trying broader search...');
+						  
+						  // FALLBACK: Try broader search without bounded restriction
+						  final broadUrl = 'https://nominatim.openstreetmap.org/search'
+							  '?q=${Uri.encodeComponent(searchTerm)}'
+							  '&format=json'
+							  '&limit=20'
+							  '&addressdetails=1'
+							  '&extratags=1'
+							  '&namedetails=1'
+							  '&viewbox=$minLon,$maxLat,$maxLon,$minLat'; // No bounded=1
+							  
+						  print('🔍 OSM SEARCH DEBUG: Fallback URL = $broadUrl');
+						  
+						  final fallbackResponse = await http.get(
+							Uri.parse(broadUrl),
+							headers: {'User-Agent': 'Locado/1.0 (Flutter App)'},
+						  );
+						  
+						  if (fallbackResponse.statusCode == 200) {
+							final List fallbackResults = json.decode(fallbackResponse.body);
+							print('🔍 OSM SEARCH DEBUG: Fallback results count = ${fallbackResults.length}');
+							
+							if (fallbackResults.isNotEmpty) {
+							  await _processDistanceAndCreateMarkers(fallbackResults, searchCenter, searchTerm);
+							  return;
+							}
+						  }
+						} else {
+						  await _processDistanceAndCreateMarkers(rawResults, searchCenter, searchTerm);
+						  return;
+						}
+
+						// If we get here, no results found at all
+						ScaffoldMessenger.of(context).showSnackBar(
+						  SnackBar(
+							content: Text('No locations found for "$searchTerm" in this area'),
+							backgroundColor: Colors.blue,
+						  ),
+						);
+
+					  } else {
+						print('🔍 OSM SEARCH DEBUG: HTTP Error ${response.statusCode}');
+						ScaffoldMessenger.of(context).showSnackBar(
+						  const SnackBar(
+							content: Text('Failed to search locations'),
+							backgroundColor: Colors.red,
+						  ),
+						);
+					  }
+					}
+
+					// Helper method to process results and create markers
+					Future<void> _processDistanceAndCreateMarkers(List rawResults, UniversalLatLng searchCenter, String searchTerm) async {
+					  // Calculate distance for each result and create enriched list
+					  List<Map<String, dynamic>> resultsWithDistance = [];
+					  
+					  for (int i = 0; i < rawResults.length; i++) {
+						final place = rawResults[i];
+						final lat = double.parse(place['lat']);
+						final lng = double.parse(place['lon']);
+						
+						// Calculate distance from user location
+						final distance = _calculateDistance(
+						  searchCenter.latitude,
+						  searchCenter.longitude,
+						  lat,
+						  lng,
+						);
+						
+						resultsWithDistance.add({
+						  'place': place,
+						  'distance': distance,
+						  'lat': lat,
+						  'lng': lng,
+						});
+						
+						if (i < 3) { // Debug first 3 results
+						  print('🔍 OSM RESULT $i: ${place['display_name']} - Distance: ${distance.toStringAsFixed(0)}m');
+						}
+					  }
+
+					  // Sort by distance (closest first)
+					  resultsWithDistance.sort((a, b) => a['distance'].compareTo(b['distance']));
+					  print('🔍 OSM SEARCH DEBUG: Sorted by distance, closest = ${resultsWithDistance.first['distance'].toStringAsFixed(0)}m');
+					  
+					  // Take only closest 10 results
+					  final closestResults = resultsWithDistance.take(10).toList();
+					  print('🔍 OSM SEARCH DEBUG: Taking closest ${closestResults.length} results');
+
+					  Set<OSMMarker> searchMarkers = {};
+
+					  for (int i = 0; i < closestResults.length; i++) {
+						final item = closestResults[i];
+						final place = item['place'];
+						final lat = item['lat'] as double;
+						final lng = item['lng'] as double;
+						final distance = item['distance'] as double;
+						
+						// Extract better name from different fields
+						String name = _extractBestName(place);
+						final fullAddress = place['display_name'];
+						
+						// Format distance for display
+						final distanceText = _formatDistance(distance);
+
+						print('🔍 OSM MARKER $i: Creating marker for "$name" at $lat,$lng (${distanceText})');
+
+						searchMarkers.add(
+						  OSMMarker(
+							markerId: 'search_${place['osm_id']}',
+							position: ll.LatLng(lat, lng),
+							title: '$name ($distanceText)',
+							child: _createDistanceMarker(distance),
+							onTap: () async {
+							  print('🔍 OSM MARKER TAP: ${name}');
+							  setState(() {
+								_osmSearchMarkers.clear();
+							  });
+							  await _updateMapWithSearchResults();
+
+							  final result = await Navigator.push(
+								context,
+								MaterialPageRoute(
+								  builder: (ctx) => TaskInputScreen(
+									location: gmaps.LatLng(lat, lng),
+									locationName: name,
+								  ),
+								),
+							  );
+
+							  if (result == true) {
+								await _loadSavedLocationsAndFocusNew();
+							  }
+							},
+						  ),
+						);
+					  }
+
+					  print('🔍 OSM SEARCH DEBUG: Created ${searchMarkers.length} search markers');
+					  for (final marker in searchMarkers) {
+						print('🔍 OSM MARKER: ${marker.markerId} at ${marker.position}');
+					  }
+
+					  setState(() {
+						_osmSearchMarkers = searchMarkers;
+					  });
+
+					  print('🔍 OSM SEARCH DEBUG: Set state - _osmSearchMarkers.length = ${_osmSearchMarkers.length}');
+
+					  await _updateMapWithSearchResults();
+
+					  print('🔍 OSM SEARCH DEBUG: Called _updateMapWithSearchResults()');
+
+					  if (_osmMapController != null && closestResults.isNotEmpty) {
+						_osmMapController!.move(searchCenter.toOpenStreetMap(), 14);
+						print('🔍 OSM SEARCH DEBUG: Moved map to search center with zoom 14');
+					  } else {
+						print('🔍 OSM SEARCH DEBUG: Map controller is null or no results');
+					  }
+
+					  ScaffoldMessenger.of(context).showSnackBar(
+						SnackBar(
+						  content: Text(
+							closestResults.isEmpty
+								? 'No locations found for "$searchTerm"'
+								: 'Found ${closestResults.length} nearby locations',
+						  ),
+						  backgroundColor: closestResults.isEmpty ? Colors.blue : Colors.green,
+						),
+					  );
+
+					  print('🔍 OSM SEARCH DEBUG: Search completed successfully');
+					}
+				 
 				}

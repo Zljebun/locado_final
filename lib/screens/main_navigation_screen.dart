@@ -193,95 +193,64 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
   }
 
 // Fetch autocomplete suggestions from Google Places API
-  Future<void> _fetchAutocompleteSuggestions(String query) async {
-    if (query.isEmpty) return;
+	Future<void> _fetchAutocompleteSuggestions(String query) async {
+	  if (query.isEmpty) return;
 
-    print('🔍 FETCH: Starting search for: $query');
+	  print('🔍 FETCH: Starting hybrid search for: $query');
 
-    try {
-      // Get current user location for bias
-      LatLng? userLocation;
-      final position = await LocationService.getCurrentLocation();
-      if (position != null) {
-        userLocation = LatLng(position.latitude, position.longitude);
-      }
+	  try {
+		// Get current user location for bias
+		LatLng? userLocation;
+		final position = await LocationService.getCurrentLocation();
+		if (position != null) {
+		  userLocation = LatLng(position.latitude, position.longitude);
+		}
 
-      // Build API URL with location bias
-      String url = 'https://maps.googleapis.com/maps/api/place/autocomplete/json'
-          '?input=${Uri.encodeComponent(query)}'
-          '&key=${dotenv.env['GOOGLE_MAPS_API_KEY_HTTP'] ?? ''}'
-          '&language=en';
+		// Check current map provider
+		final prefs = await SharedPreferences.getInstance();
+		final useOSM = prefs.getBool('use_openstreetmap') ?? false;
 
-      // Add location bias if available
-      if (userLocation != null) {
-        url += '&location=${userLocation.latitude},${userLocation.longitude}'
-            '&radius=5000'; // 5km radius
-      }
+		print('🔍 FETCH: Using ${useOSM ? 'OSM' : 'Google'} suggestions API');
 
-      print('🔍 FETCH: API URL: $url');
+		if (useOSM) {
+		  await _fetchNominatimSuggestions(query, userLocation);
+		} else {
+		  await _fetchGooglePlacesSuggestions(query, userLocation);
+		}
 
-      final response = await http.get(Uri.parse(url));
-
-      print('🔍 FETCH: Response status: ${response.statusCode}');
-      print('🔍 FETCH: Response body: ${response.body}');
-
-      if (response.statusCode == 200) {
-        final data = json.decode(response.body);
-        final List<dynamic> predictions = data['predictions'] ?? [];
-
-        print('🔍 FETCH: Found ${predictions.length} predictions');
-
-        final suggestions = predictions
-            .map((prediction) => AutocompleteSuggestion.fromJson(prediction))
-            .toList();
-
-        if (mounted) {
-          setState(() {
-            _suggestions = suggestions;
-            _isLoadingSuggestions = false;
-            _showSuggestions = suggestions.isNotEmpty;
-          });
-          print('🔍 FETCH: Updated UI with ${suggestions.length} suggestions');
-        }
-      } else {
-        print('❌ FETCH: Error response: ${response.statusCode}');
-        if (mounted) {
-          setState(() {
-            _suggestions.clear();
-            _isLoadingSuggestions = false;
-            _showSuggestions = false;
-          });
-        }
-      }
-    } catch (e) {
-      print('❌ FETCH: Exception: $e');
-      if (mounted) {
-        setState(() {
-          _suggestions.clear();
-          _isLoadingSuggestions = false;
-          _showSuggestions = false;
-        });
-      }
-    }
-  }
+	  } catch (e) {
+		print('❌ FETCH: Exception: $e');
+		if (mounted) {
+		  setState(() {
+			_suggestions.clear();
+			_isLoadingSuggestions = false;
+			_showSuggestions = false;
+		  });
+		}
+	  }
+	}
 
 // Handle suggestion selection
-  Future<void> _onSuggestionSelected(AutocompleteSuggestion suggestion) async {
-    // Hide suggestions and clear focus
-    setState(() {
-      _showSuggestions = false;
-      _suggestions.clear();
-      _isLoadingSuggestions = false;
-    });
+	Future<void> _onSuggestionSelected(AutocompleteSuggestion suggestion) async {
+	  // Hide suggestions and clear focus
+	  setState(() {
+		_showSuggestions = false;
+		_suggestions.clear();
+		_isLoadingSuggestions = false;
+	  });
 
-    _searchFocusNode.unfocus();
+	  _searchFocusNode.unfocus();
 
-    // Update search field with selected text
-    _searchController.text = suggestion.mainText;
+	  // Update search field with selected text
+	  _searchController.text = suggestion.mainText;
 
-    // Get place details and perform search
-    await _getPlaceDetailsAndSearch(suggestion.placeId);
-  }
+	  // Check if this is OSM or Google suggestion and handle accordingly
+	  if (suggestion.placeId.startsWith('osm_')) {
+		await _handleOSMSuggestionSelection(suggestion);
+	  } else {
+		await _getPlaceDetailsAndSearch(suggestion.placeId);
+	  }
+	}
 
 // Get detailed place information and trigger map search
   Future<void> _getPlaceDetailsAndSearch(String placeId) async {
@@ -1618,4 +1587,212 @@ Future<void> _selectMapProvider(String provider) async {
     );
   }
 }
+
+  // Google Places Autocomplete (existing functionality)
+	Future<void> _fetchGooglePlacesSuggestions(String query, LatLng? userLocation) async {
+	  // Build API URL with location bias
+	  String url = 'https://maps.googleapis.com/maps/api/place/autocomplete/json'
+		  '?input=${Uri.encodeComponent(query)}'
+		  '&key=${dotenv.env['GOOGLE_MAPS_API_KEY_HTTP'] ?? ''}'
+		  '&language=en';
+
+	  // Add location bias if available
+	  if (userLocation != null) {
+		url += '&location=${userLocation.latitude},${userLocation.longitude}'
+			'&radius=5000'; // 5km radius
+	  }
+
+	  print('🔍 FETCH: Google API URL: $url');
+
+	  final response = await http.get(Uri.parse(url));
+
+	  print('🔍 FETCH: Google response status: ${response.statusCode}');
+	  print('🔍 FETCH: Google response body: ${response.body}');
+
+	  if (response.statusCode == 200) {
+		final data = json.decode(response.body);
+		final List<dynamic> predictions = data['predictions'] ?? [];
+
+		print('🔍 FETCH: Found ${predictions.length} Google predictions');
+
+		final suggestions = predictions
+			.map((prediction) => AutocompleteSuggestion.fromJson(prediction))
+			.toList();
+
+		if (mounted) {
+		  setState(() {
+			_suggestions = suggestions;
+			_isLoadingSuggestions = false;
+			_showSuggestions = suggestions.isNotEmpty;
+		  });
+		  print('🔍 FETCH: Updated UI with ${suggestions.length} Google suggestions');
+		}
+	  } else {
+		print('❌ FETCH: Google error response: ${response.statusCode}');
+		if (mounted) {
+		  setState(() {
+			_suggestions.clear();
+			_isLoadingSuggestions = false;
+			_showSuggestions = false;
+		  });
+		}
+	  }
+	}
+
+	// NEW: Nominatim-based autocomplete suggestions for OpenStreetMap
+	Future<void> _fetchNominatimSuggestions(String query, LatLng? userLocation) async {
+	  // Default to Vienna if no user location
+	  final double centerLat = userLocation?.latitude ?? 48.2082;
+	  final double centerLng = userLocation?.longitude ?? 16.3738;
+
+	  // Create viewbox around current location (approximately 10km radius)
+	  final double radiusOffset = 0.1; // ~10km in degrees
+	  final double minLon = centerLng - radiusOffset;
+	  final double maxLat = centerLat + radiusOffset;
+	  final double maxLon = centerLng + radiusOffset;
+	  final double minLat = centerLat - radiusOffset;
+
+	  final url = 'https://nominatim.openstreetmap.org/search'
+		  '?q=${Uri.encodeComponent(query)}'
+		  '&format=json'
+		  '&limit=8' // Fewer results for autocomplete
+		  '&addressdetails=1'
+		  '&namedetails=1'
+		  '&viewbox=$minLon,$maxLat,$maxLon,$minLat'
+		  '&bounded=1'; // Restrict to viewbox for relevant results
+
+	  print('🔍 FETCH: Nominatim API URL: $url');
+
+	  final response = await http.get(
+		Uri.parse(url),
+		headers: {
+		  'User-Agent': 'Locado/1.0 (Flutter App)', // Required by Nominatim
+		},
+	  );
+
+	  print('🔍 FETCH: Nominatim response status: ${response.statusCode}');
+
+	  if (response.statusCode == 200) {
+		final List<dynamic> results = json.decode(response.body);
+		print('🔍 FETCH: Found ${results.length} Nominatim results');
+
+		// Convert Nominatim results to AutocompleteSuggestion format
+		final List<AutocompleteSuggestion> suggestions = [];
+
+		for (final result in results) {
+		  final displayName = result['display_name'] ?? '';
+		  final parts = displayName.split(',');
+		  
+		  // Extract main text (place name)
+		  String mainText = _extractBestNameFromNominatim(result);
+		  
+		  // Extract secondary text (address/location info)
+		  String? secondaryText;
+		  if (parts.length > 1) {
+			// Take next 2-3 parts for context
+			final contextParts = parts.skip(1).take(3).map((s) => s.trim()).toList();
+			secondaryText = contextParts.join(', ');
+		  }
+
+		  suggestions.add(
+			AutocompleteSuggestion(
+			  placeId: 'osm_${result['osm_type']}_${result['osm_id']}', // Create unique ID
+			  description: displayName,
+			  mainText: mainText,
+			  secondaryText: secondaryText,
+			),
+		  );
+		}
+
+		print('🔍 FETCH: Converted to ${suggestions.length} OSM suggestions');
+
+		if (mounted) {
+		  setState(() {
+			_suggestions = suggestions;
+			_isLoadingSuggestions = false;
+			_showSuggestions = suggestions.isNotEmpty;
+		  });
+		  print('🔍 FETCH: Updated UI with ${suggestions.length} Nominatim suggestions');
+		}
+	  } else {
+		print('❌ FETCH: Nominatim error response: ${response.statusCode}');
+		if (mounted) {
+		  setState(() {
+			_suggestions.clear();
+			_isLoadingSuggestions = false;
+			_showSuggestions = false;
+		  });
+		}
+	  }
+	}
+
+	// Helper method to extract best name from Nominatim result
+	String _extractBestNameFromNominatim(Map<String, dynamic> result) {
+	  // Try different name fields in order of preference
+	  if (result['namedetails'] != null) {
+		final nameDetails = result['namedetails'];
+		if (nameDetails['name:en'] != null && nameDetails['name:en'].toString().isNotEmpty) {
+		  return nameDetails['name:en'];
+		}
+		if (nameDetails['name'] != null && nameDetails['name'].toString().isNotEmpty) {
+		  return nameDetails['name'];
+		}
+	  }
+	  
+	  if (result['name'] != null && result['name'].toString().isNotEmpty) {
+		return result['name'];
+	  }
+	  
+	  // Fallback to first part of display_name
+	  final displayName = result['display_name'] ?? '';
+	  final parts = displayName.split(',');
+	  return parts.isNotEmpty ? parts.first.trim() : 'Unknown Location';
+	}
+	
+	// NEW: Handle OSM suggestion selection
+	Future<void> _handleOSMSuggestionSelection(AutocompleteSuggestion suggestion) async {
+	  setState(() {
+		_isSearching = true;
+	  });
+
+	  try {
+		// For OSM suggestions, we can directly trigger the search
+		// since we already have the location info in the description
+		
+		// Trigger map search with the suggestion text
+		final mapState = _mapKey.currentState as dynamic;
+		if (mapState != null) {
+		  await mapState.performSearch(suggestion.mainText);
+		}
+
+		// Show success message
+		ScaffoldMessenger.of(context).showSnackBar(
+		  SnackBar(
+			content: Row(
+			  children: [
+				const Icon(Icons.location_on, color: Colors.white),
+				const SizedBox(width: 8),
+				Expanded(child: Text('Found: ${suggestion.mainText}')),
+			  ],
+			),
+			backgroundColor: Colors.green,
+			duration: const Duration(seconds: 2),
+		  ),
+		);
+
+	  } catch (e) {
+		ScaffoldMessenger.of(context).showSnackBar(
+		  SnackBar(
+			content: Text('Error finding location: $e'),
+			backgroundColor: Colors.red,
+		  ),
+		);
+	  }
+
+	  if (mounted) {
+		setState(() {
+		  _isSearching = false;
+		});
+	  }
+	}
 }
