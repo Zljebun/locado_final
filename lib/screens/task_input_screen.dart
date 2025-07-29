@@ -653,6 +653,7 @@ class _TaskInputScreenState extends State<TaskInputScreen> {
 
     setState(() => _isLoading = false);
     Navigator.pop(context, true);
+    print('✅ DEBUG: TaskInputScreen returning true after save');
   }
 
   @override

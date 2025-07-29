@@ -111,37 +111,63 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
     _debounceTimer?.cancel();
     super.dispose();
   }
+  
+  void _testTaskListRefresh() {
+  print('🧪 TEST: Manual task list refresh test');
+  ScaffoldMessenger.of(context).showSnackBar(
+    const SnackBar(
+      content: Text('Refreshing task list...'),
+      duration: Duration(seconds: 1),
+    ),
+  );
+  _loadTaskData();
+}
 
   // Load and cache task data
-  Future<void> _loadTaskData() async {
-    setState(() {
-      _isLoadingTasks = true;
-    });
+	Future<void> _loadTaskData() async {
+	  print('🔄 LOAD TASK DATA: Starting to load task data...');
+	  
+	  setState(() {
+		_isLoadingTasks = true;
+	  });
 
-    try {
-      final tasks = await DatabaseHelper.instance.getAllTaskLocations();
-      _cachedTasks = tasks;
+	  try {
+		final tasks = await DatabaseHelper.instance.getAllTaskLocations();
+		print('🔄 LOAD TASK DATA: Loaded ${tasks.length} tasks from database');
+		
+		// Debug - prikaži prva 3 taska
+		for (int i = 0; i < tasks.length && i < 3; i++) {
+		  print('🔄 LOAD TASK DATA: Task $i: ${tasks[i].title} at ${tasks[i].latitude}, ${tasks[i].longitude}');
+		}
+		
+		_cachedTasks = tasks;
 
-      if (tasks.isNotEmpty) {
-        setState(() {
-          _isLoadingDistance = true;
-        });
+		if (tasks.isNotEmpty) {
+		  setState(() {
+			_isLoadingDistance = true;
+		  });
 
-        final sortedTasks = await _sortTasksByDistanceWithDetails(tasks);
-        _cachedSortedTasks = sortedTasks;
-      } else {
-        _cachedSortedTasks = [];
-      }
-    } catch (e) {
-      _cachedTasks = [];
-      _cachedSortedTasks = [];
-    }
+		  print('🔄 LOAD TASK DATA: Calculating distances...');
+		  final sortedTasks = await _sortTasksByDistanceWithDetails(tasks);
+		  print('🔄 LOAD TASK DATA: Sorted ${sortedTasks.length} tasks by distance');
+		  
+		  _cachedSortedTasks = sortedTasks;
+		} else {
+		  _cachedSortedTasks = [];
+		}
+	  } catch (e) {
+		print('❌ LOAD TASK DATA: Error loading tasks: $e');
+		_cachedTasks = [];
+		_cachedSortedTasks = [];
+	  }
 
-    setState(() {
-      _isLoadingTasks = false;
-      _isLoadingDistance = false;
-    });
-  }
+	  setState(() {
+		_isLoadingTasks = false;
+		_isLoadingDistance = false;
+	  });
+	  
+	  print('🔄 LOAD TASK DATA: Completed, setState() called');
+	}
 
   // Setup search field listeners for autocomplete
   void _setupSearchListeners() {
@@ -322,20 +348,24 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
           key: _mapKey,
           selectedLocation: widget.selectedLocation,
         );
-      case 1:
-        return AILocationSearchScreen(
-          onTasksCreated: () {
-            setState(() {
-              _currentIndex = 0; // Switch to map tab
-            });
-            // Reload task data when new tasks are created
-            Future.delayed(const Duration(milliseconds: 100), () {
-              if (mounted) {
-                _loadTaskData();
-              }
-            });
-          },
-        );
+	case 1:
+	  return AILocationSearchScreen(
+		onTasksCreated: () {
+		  print('🔄 AI SEARCH: Tasks created callback triggered');
+		  
+		  setState(() {
+			_currentIndex = 0; // Switch to map tab
+		  });
+		  
+		  // Reload task data when new tasks are created
+		  Future.delayed(const Duration(milliseconds: 100), () {
+			if (mounted) {
+			  print('🔄 AI SEARCH: Reloading task data after AI task creation');
+			  _loadTaskData();
+			}
+		  });
+		},
+	  );
       case 2:
         return _buildTaskListPage();
       case 3:
@@ -532,51 +562,59 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
     }
   }
 
-  // Build task list page with enhanced functionality
-// Build task list page with enhanced functionality
-  Widget _buildTaskListPage() {
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(_isSelectionMode
-            ? '${_selectedTaskIds.length} Selected'
-            : 'All Tasks'
-        ),
-        backgroundColor: Colors.teal,
-        foregroundColor: Colors.white,
-        automaticallyImplyLeading: false,
-        actions: [
-          if (_isSelectionMode) ...[
-            if (_isDeleting)
-              const Padding(
-                padding: EdgeInsets.all(16.0),
-                child: SizedBox(
-                  width: 20,
-                  height: 20,
-                  child: CircularProgressIndicator(
-                    strokeWidth: 2,
-                    color: Colors.white,
-                  ),
-                ),
-              )
-            else
-              IconButton(
-                icon: const Icon(Icons.delete),
-                onPressed: _selectedTaskIds.isEmpty ? null : _deleteSelectedTasks,
-              ),
-            IconButton(
-              icon: const Icon(Icons.close),
-              onPressed: _toggleSelectionMode,
-            ),
-          ] else
-            IconButton(
-              icon: const Icon(Icons.checklist),
-              onPressed: _toggleSelectionMode,
-            ),
-        ],
-      ),
-      body: _buildTaskListBody(),
-    );
-  }
+	Widget _buildTaskListPage() {
+
+	  return Scaffold(
+		appBar: AppBar(
+		  title: Text(_isSelectionMode
+			  ? '${_selectedTaskIds.length} Selected'
+			  : 'All Tasks'
+		  ),
+		  backgroundColor: Colors.teal,
+		  foregroundColor: Colors.white,
+		  automaticallyImplyLeading: false,
+		  actions: [
+			if (_isSelectionMode) ...[
+			  if (_isDeleting)
+				const Padding(
+				  padding: EdgeInsets.all(16.0),
+				  child: SizedBox(
+					width: 20,
+					height: 20,
+					child: CircularProgressIndicator(
+					  strokeWidth: 2,
+					  color: Colors.white,
+					),
+				  ),
+				)
+			  else
+				IconButton(
+				  icon: const Icon(Icons.delete),
+				  onPressed: _selectedTaskIds.isEmpty ? null : _deleteSelectedTasks,
+				),
+			  IconButton(
+				icon: const Icon(Icons.close),
+				onPressed: _toggleSelectionMode,
+			  ),
+			] else ...[
+			  IconButton(
+				icon: const Icon(Icons.refresh),
+				onPressed: () {
+				  print('🔄 TASKS LIST: Manual refresh button pressed');
+				  _loadTaskData();
+				},
+				tooltip: 'Refresh Tasks',
+			  ),
+			  IconButton(
+				icon: const Icon(Icons.checklist),
+				onPressed: _toggleSelectionMode,
+			  ),
+			],
+		  ],
+		),
+		body: _buildTaskListBody(),
+	  );
+	}
 
   Widget _buildTaskListBody() {
     // Show loading indicator
@@ -948,6 +986,14 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
             },
           ),
 		  
+		  _buildMoreOption(
+			  icon: Icons.refresh,
+			  title: 'Test Task Refresh',
+			  subtitle: 'Debug: manually refresh task list',
+			  iconColor: Colors.purple,
+			  onTap: _testTaskListRefresh,
+			),
+		  
 		  //const SizedBox(height: 8),
 
         ],
@@ -1032,19 +1078,24 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
   }
 
   // Helper methods for task operations
-  void _openTaskDetail(TaskLocation task) async {
-    final result = await Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (ctx) => TaskDetailScreen(taskLocation: task),
-      ),
-    );
+	void _openTaskDetail(TaskLocation task) async {
+	  print('🔄 OPEN TASK DETAIL: Opening task: ${task.title}');
+	  
+	  final result = await Navigator.push(
+		context,
+		MaterialPageRoute(
+		  builder: (ctx) => TaskDetailScreen(taskLocation: task),
+		),
+	  );
 
-    if (result != null) {
-      // Reload task data instead of just calling setState
-      await _loadTaskData();
-    }
-  }
+	  print('🔄 OPEN TASK DETAIL: Returned with result: $result');
+
+	  if (result != null) {
+		print('🔄 OPEN TASK DETAIL: Result is not null, reloading task data...');
+		// Reload task data instead of just calling setState
+		await _loadTaskData();
+	  }
+	}
 
   void _deleteTask(TaskLocation task) {
     HapticFeedback.mediumImpact();
@@ -1072,17 +1123,18 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
                 ),
               );
 
-              if (result == true) {
-                // Reload task data instead of just calling setState
-                await _loadTaskData();
+				if (result == true) {
+				  print('🔄 DELETE TASK: Task deleted, reloading data...');
+				  // Reload task data instead of just calling setState
+				  await _loadTaskData();
 
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(
-                    content: Text('Task "${task.title}" deleted'),
-                    backgroundColor: Colors.red,
-                  ),
-                );
-              }
+				  ScaffoldMessenger.of(context).showSnackBar(
+					SnackBar(
+					  content: Text('Task "${task.title}" deleted'),
+					  backgroundColor: Colors.red,
+					),
+				  );
+				}
             },
             style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
             child: const Text('Delete', style: TextStyle(color: Colors.white)),
@@ -1183,6 +1235,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
           ),
         );
 
+        print('🔄 FILE IMPORT: Task imported, reloading data...');
         await _loadTaskData();
       }
     } catch (e) {
@@ -1206,65 +1259,74 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
       ),
 
       // Bottom Navigation Bar
-      bottomNavigationBar: BottomNavigationBar(
-        currentIndex: _currentIndex,
-        onTap: (index) {
-          setState(() {
-            _currentIndex = index;
-          });
+		bottomNavigationBar: BottomNavigationBar(
+		  currentIndex: _currentIndex,
+		  onTap: (index) {
+			// ✅ ZAPAMTI staru vrednost PRE setState
+			final int previousIndex = _currentIndex;
+			
+			setState(() {
+			  _currentIndex = index;
+			});
 
-          // Refresh task data when switching to tasks tab
-          if (index == 2 && _currentIndex != 2) {
-            _loadTaskData();
-          }
-        },
-        type: BottomNavigationBarType.fixed,
-        selectedItemColor: Colors.teal,
-        unselectedItemColor: Colors.grey,
-        items: const [
-          BottomNavigationBarItem(
-            icon: Icon(Icons.map),
-            label: 'Map',
-          ),
-          BottomNavigationBarItem(
-            icon: Icon(Icons.smart_toy),
-            label: 'AI Search',
-          ),
-          BottomNavigationBarItem(
-            icon: Icon(Icons.format_list_bulleted),
-            label: 'Tasks',
-          ),
-          BottomNavigationBarItem(
-            icon: Icon(Icons.calendar_today),
-            label: 'Calendar',
-          ),
-          BottomNavigationBarItem(
-            icon: Icon(Icons.more_horiz),
-            label: 'More',
-          ),
-        ],
-      ),
+			// ✅ ISPRAVKA - koristi previousIndex umesto _currentIndex
+			if (index == 2 && previousIndex != 2) {
+			  print('🔄 MAIN NAV: Switching to Tasks tab, refreshing data...');
+			  _loadTaskData();
+			}
+		  },
+		  type: BottomNavigationBarType.fixed,
+		  selectedItemColor: Colors.teal,
+		  unselectedItemColor: Colors.grey,
+		  items: const [
+			BottomNavigationBarItem(
+			  icon: Icon(Icons.map),
+			  label: 'Map',
+			),
+			BottomNavigationBarItem(
+			  icon: Icon(Icons.smart_toy),
+			  label: 'AI Search',
+			),
+			BottomNavigationBarItem(
+			  icon: Icon(Icons.format_list_bulleted),
+			  label: 'Tasks',
+			),
+			BottomNavigationBarItem(
+			  icon: Icon(Icons.calendar_today),
+			  label: 'Calendar',
+			),
+			BottomNavigationBarItem(
+			  icon: Icon(Icons.more_horiz),
+			  label: 'More',
+			),
+		  ],
+		),
 
       // Floating Action Button (only show on map tab)
-      floatingActionButton: _currentIndex == 0 ? FloatingActionButton(
-        onPressed: () async {
-          final userPosition = LatLng(48.2082, 16.3738); // Default Vienna coordinates
-          final result = await Navigator.push(
-            context,
-            MaterialPageRoute(
-              builder: (ctx) => TaskInputScreen(location: userPosition),
-            ),
-          );
+		floatingActionButton: _currentIndex == 0 ? FloatingActionButton(
+		  onPressed: () async {
+			print('🔄 FAB: FloatingActionButton pressed, opening TaskInputScreen...');
+			
+			final userPosition = LatLng(48.2082, 16.3738); // Default Vienna coordinates
+			final result = await Navigator.push(
+			  context,
+			  MaterialPageRoute(
+				builder: (ctx) => TaskInputScreen(location: userPosition),
+			  ),
+			);
 
-          if (result == true) {
-            // Reload task data after new task is added
-            await _loadTaskData();
-          }
-        },
-        backgroundColor: Colors.teal,
-        foregroundColor: Colors.white,
-        child: const Icon(Icons.add),
-      ) : null,
+			print('🔄 FAB: TaskInputScreen returned with result: $result');
+
+			if (result == true) {
+			  print('🔄 FAB: Result is true, reloading task data...');
+			  // Reload task data after new task is added
+			  await _loadTaskData();
+			}
+		  },
+		  backgroundColor: Colors.teal,
+		  foregroundColor: Colors.white,
+		  child: const Icon(Icons.add),
+		) : null,
 
       floatingActionButtonLocation: FloatingActionButtonLocation.startFloat,
     );

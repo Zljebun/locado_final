@@ -173,6 +173,13 @@ class _HomeMapScreenState extends State<HomeMapScreen>
     WidgetsBinding.instance.addPostFrameCallback((_) {
       DeleteTaskService.checkAndHandlePendingDeleteTask(context);
     });
+	
+  Future.delayed(Duration.zero, () async {
+    final taskLocations = await DatabaseHelper.instance.getAllTaskLocations();
+    _previousTaskCount = taskLocations.length;
+    print('🔄 DEBUG: Initial task count set to $_previousTaskCount');
+  });
+  
   }
 
   void _setupImmediateUI() {
@@ -1295,14 +1302,14 @@ class _HomeMapScreenState extends State<HomeMapScreen>
 				 myLocationEnabled: true,
 				 myLocationButtonEnabled: true,
 				 onLongPress: (gmaps.LatLng position) async {
-				   final result = await Navigator.push(
-					 context,
-					 MaterialPageRoute(builder: (ctx) => TaskInputScreen(location: position)),
-				   );
-				   if (result == true) {
-					 _fastLoadBasicLocations();
-				   }
-				 },
+				  final result = await Navigator.push(
+					context,
+					MaterialPageRoute(builder: (ctx) => TaskInputScreen(location: position)),
+				  );
+				  if (result == true) {
+					await _loadSavedLocationsAndFocusNew(); // ✅ Koristiti ovu metodu umesto _fastLoadBasicLocations
+				  }
+				},
 				 onTap: (gmaps.LatLng location) {
 				   // Clear search results when tapping on map
 				   if (_googleSearchMarkers.isNotEmpty) {
@@ -1347,7 +1354,7 @@ class _HomeMapScreenState extends State<HomeMapScreen>
 					 MaterialPageRoute(builder: (ctx) => TaskInputScreen(location: gmaps.LatLng(position.latitude, position.longitude))),
 				   );
 				   if (result == true) {
-					 _fastLoadBasicLocations();
+					 await _loadSavedLocationsAndFocusNew(); // ✅ Koristiti ovu metodu umesto _fastLoadBasicLocations
 				   }
 				 },
 				 onTap: (ll.LatLng location) {
@@ -1417,49 +1424,63 @@ class _HomeMapScreenState extends State<HomeMapScreen>
 
 			 // REMAINING METHODS (continue with existing methods but make them provider-aware)
 			 
-			 Future<void> _loadSavedLocationsAndFocusNew() async {
-			   try {
-				 List<Location> locations = await DatabaseHelper.instance.getAllLocations();
-				 List<TaskLocation> taskLocations = await DatabaseHelper.instance.getAllTaskLocations();
+			Future<void> _loadSavedLocationsAndFocusNew() async {
+			  print('🔄 DEBUG: _loadSavedLocationsAndFocusNew() called');
+			  try {
+				List<Location> locations = await DatabaseHelper.instance.getAllLocations();
+				List<TaskLocation> taskLocations = await DatabaseHelper.instance.getAllTaskLocations();
+				
+				print('🔄 DEBUG: Loaded ${taskLocations.length} task locations');
+				print('🔄 DEBUG: Previous count was $_previousTaskCount');
 
-				 // Find new task (last in list)
-				 TaskLocation? newTask;
-				 if (taskLocations.isNotEmpty) {
-				   if (_savedLocations.length < taskLocations.length) {
-					 // Has new task
-					 newTask = taskLocations.last;
-					 _lastAddedTask = newTask;
-				   }
-				 }
+				// Find new task (last in list)
+				TaskLocation? newTask;
+				if (taskLocations.isNotEmpty) {
+				  if (_savedLocations.length < taskLocations.length) {
+					// Has new task
+					newTask = taskLocations.last;
+					_lastAddedTask = newTask;
+					print('🔄 DEBUG: Found new task: ${newTask.title}');
+				  }
+				}
 
-				 _savedLocations = taskLocations;
+				_savedLocations = taskLocations;
 
-				 // Create markers for current provider
-				 if (_currentMapProvider == MapProvider.googleMaps) {
-				   await _createGoogleMarkersWithCustomIcons(locations, taskLocations);
-				 } else {
-				   await _createOSMMarkers(locations, taskLocations);
-				 }
+				// Create markers for current provider
+				if (_currentMapProvider == MapProvider.googleMaps) {
+				  await _createGoogleMarkersWithCustomIcons(locations, taskLocations);
+				  print('🔄 DEBUG: Created Google markers');
+				} else {
+				  await _createOSMMarkers(locations, taskLocations);
+				  print('🔄 DEBUG: Created OSM markers');
+				}
 
-				 setState(() {
-				   _isLoading = false;
-				 });
+				setState(() {
+				  _isLoading = false;
+				});
+				
+				print('🔄 DEBUG: setState() called');
 
-				 // FOCUS ON NEW LOCATION
-				 if (newTask != null) {
-				   await _focusOnNewTask(newTask);
-				 }
+				// FOCUS ON NEW LOCATION
+				if (newTask != null) {
+				  print('🔄 DEBUG: Focusing on new task: ${newTask.title} at ${newTask.latitude}, ${newTask.longitude}');
+				  await _focusOnNewTask(newTask);
+				} else {
+				  print('🔄 DEBUG: No new task to focus on');
+				}
 
-				 // Geofencing sync
-				 if (isGeofencingEnabled && _savedLocations.isNotEmpty) {
-				   await syncTaskLocationsFromScreen(_savedLocations);
-				 }
-			   } catch (e) {
-				 setState(() {
-				   _isLoading = false;
-				 });
-			   }
-			 }
+				// Geofencing sync
+				if (isGeofencingEnabled && _savedLocations.isNotEmpty) {
+				  await syncTaskLocationsFromScreen(_savedLocations);
+				  print('🔄 DEBUG: Geofencing synced');
+				}
+			  } catch (e) {
+				print('❌ DEBUG: Error in _loadSavedLocationsAndFocusNew: $e');
+				setState(() {
+				  _isLoading = false;
+				});
+			  }
+			}
 
 			 // Create Google markers with custom icons (for focus new functionality)
 			 Future<void> _createGoogleMarkersWithCustomIcons(List<Location> locations, List<TaskLocation> taskLocations) async {
