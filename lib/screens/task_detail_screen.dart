@@ -1,4 +1,4 @@
-// screens/task_detail_screen.dart - HYBRID VERSION
+// screens/task_detail_screen.dart - HYBRID VERSION SA NAVIGACIJOM
 
 import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart' as gmaps;
@@ -10,6 +10,7 @@ import 'package:locado_final/models/calendar_event.dart';
 import 'package:locado_final/helpers/database_helper.dart';
 import 'package:locado_final/screens/notification_service.dart';
 import 'package:share_plus/share_plus.dart';
+import 'package:url_launcher/url_launcher.dart'; // ✅ DODATO za navigaciju
 import 'dart:io';
 import 'dart:convert';
 import 'package:path_provider/path_provider.dart';
@@ -58,7 +59,8 @@ class TaskDetailScreen extends StatefulWidget {
   State<TaskDetailScreen> createState() => _TaskDetailScreenState();
 }
 
-class _TaskDetailScreenState extends State<TaskDetailScreen> {
+class _TaskDetailScreenState extends State<TaskDetailScreen>
+    with TickerProviderStateMixin {
   late List<bool> _checkedItems;
   late TextEditingController _titleController;
   final TextEditingController _newItemController = TextEditingController();
@@ -84,9 +86,30 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
   TimeOfDay? _scheduledTime;
   CalendarEvent? _linkedCalendarEvent;
 
+  // ✅ DRAGGABLE BOTTOM SHEET VARIABLES
+  late AnimationController _bottomSheetController;
+  late Animation<double> _bottomSheetAnimation;
+  double _bottomSheetHeight = 0.6; // 60% of screen initially
+  final double _minBottomSheetHeight = 0.3; // 30% minimum
+  final double _maxBottomSheetHeight = 0.85; // 85% maximum
+
   @override
   void initState() {
     super.initState();
+    
+    // ✅ INITIALIZE BOTTOM SHEET ANIMATION
+    _bottomSheetController = AnimationController(
+      duration: const Duration(milliseconds: 300),
+      vsync: this,
+    );
+    _bottomSheetAnimation = Tween<double>(
+      begin: 0.0,
+      end: 1.0,
+    ).animate(CurvedAnimation(
+      parent: _bottomSheetController,
+      curve: Curves.easeInOut,
+    ));
+    
     _loadMapProviderSetting();
     _titleController = TextEditingController(text: widget.taskLocation.title);
     _selectedLocation = UniversalLatLng(widget.taskLocation.latitude, widget.taskLocation.longitude);
@@ -111,7 +134,281 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
     _titleController.dispose();
     _newItemController.dispose();
     _newItemFocusNode.dispose();
+    _bottomSheetController.dispose(); // ✅ DISPOSE ANIMATION CONTROLLER
     super.dispose();
+  }
+
+  // ✅ NOVA NAVIGACIJA FUNKCIONALNOST - POTPUNO BESPLATNA
+  
+  /// Otvara navigaciju do task lokacije koristeći default navigaciju na telefonu
+  Future<void> _navigateToTask() async {
+    try {
+      final lat = widget.taskLocation.latitude;
+      final lng = widget.taskLocation.longitude;
+      final taskTitle = Uri.encodeComponent(widget.taskLocation.title);
+      
+      // PRISTUP 1: Google Maps sa turn-by-turn navigacijom
+      final googleMapsNavUrl = 'google.navigation:q=$lat,$lng';
+      
+      print('🗺️ NAVIGACIJA: Pokušavam Google Maps navigaciju: $googleMapsNavUrl');
+      
+      if (await canLaunchUrl(Uri.parse(googleMapsNavUrl))) {
+        await launchUrl(
+          Uri.parse(googleMapsNavUrl),
+          mode: LaunchMode.externalApplication,
+        );
+        
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Row(
+                children: [
+                  const Icon(Icons.navigation, color: Colors.white),
+                  const SizedBox(width: 8),
+                  Expanded(child: Text('Opening turn-by-turn navigation to ${widget.taskLocation.title}')),
+                ],
+              ),
+              backgroundColor: Colors.green,
+              duration: const Duration(seconds: 3),
+            ),
+          );
+        }
+        
+        return;
+      }
+      
+      // PRISTUP 2: Waze navigacija
+      final wazeUrl = 'waze://?ll=$lat,$lng&navigate=yes';
+      
+      print('🗺️ NAVIGACIJA: Pokušavam Waze: $wazeUrl');
+      
+      if (await canLaunchUrl(Uri.parse(wazeUrl))) {
+        await launchUrl(
+          Uri.parse(wazeUrl),
+          mode: LaunchMode.externalApplication,
+        );
+        
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Row(
+                children: [
+                  const Icon(Icons.navigation, color: Colors.white),
+                  const SizedBox(width: 8),
+                  Expanded(child: Text('Opening Waze navigation to ${widget.taskLocation.title}')),
+                ],
+              ),
+              backgroundColor: Colors.green,
+              duration: const Duration(seconds: 3),
+            ),
+          );
+        }
+        
+        return;
+      }
+      
+      // PRISTUP 3: Apple Maps sa directions (iOS)
+      if (Platform.isIOS) {
+        final appleMapsDirectionsUrl = 'http://maps.apple.com/?daddr=$lat,$lng&dirflg=d';
+        
+        print('🗺️ NAVIGACIJA: Pokušavam Apple Maps directions: $appleMapsDirectionsUrl');
+        
+        if (await canLaunchUrl(Uri.parse(appleMapsDirectionsUrl))) {
+          await launchUrl(
+            Uri.parse(appleMapsDirectionsUrl),
+            mode: LaunchMode.externalApplication,
+          );
+          
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Row(
+                  children: [
+                    const Icon(Icons.navigation, color: Colors.white),
+                    const SizedBox(width: 8),
+                    Expanded(child: Text('Opening Apple Maps directions to ${widget.taskLocation.title}')),
+                  ],
+                ),
+                backgroundColor: Colors.green,
+                duration: const Duration(seconds: 3),
+              ),
+            );
+          }
+          
+          return;
+        }
+      }
+      
+      // PRISTUP 4: Fallback - Google Maps web sa directions
+      final googleMapsWebDirectionsUrl = 'https://www.google.com/maps/dir/?api=1&destination=$lat,$lng';
+      
+      print('🗺️ NAVIGACIJA: Pokušavam Google Maps web directions: $googleMapsWebDirectionsUrl');
+      
+      if (await canLaunchUrl(Uri.parse(googleMapsWebDirectionsUrl))) {
+        await launchUrl(
+          Uri.parse(googleMapsWebDirectionsUrl),
+          mode: LaunchMode.externalApplication,
+        );
+        
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Opening web directions - Google Maps'),
+              backgroundColor: Colors.blue,
+            ),
+          );
+        }
+        
+        return;
+      }
+      
+      // PRISTUP 5: Poslednji fallback - generic geo URI
+      final geoUri = 'geo:$lat,$lng?q=$lat,$lng($taskTitle)';
+      
+      print('🗺️ NAVIGACIJA: Pokušavam geo URI fallback: $geoUri');
+      
+      if (await canLaunchUrl(Uri.parse(geoUri))) {
+        await launchUrl(
+          Uri.parse(geoUri),
+          mode: LaunchMode.externalApplication,
+        );
+        
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Opening location in default map app'),
+              backgroundColor: Colors.orange,
+            ),
+          );
+        }
+        
+        return;
+      }
+      
+      // Ako ništa ne radi
+      throw Exception('No navigation app available');
+      
+    } catch (e) {
+      print('❌ NAVIGACIJA ERROR: $e');
+      
+      if (mounted) {
+        // Fallback - pokaži koordinate korisniku da može ručno ukucati
+        _showNavigationFallbackDialog();
+      }
+    }
+  }
+  
+  /// Dialog koji se prikazuje ako navigacija ne radi
+  void _showNavigationFallbackDialog() {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Row(
+          children: [
+            Icon(Icons.navigation, color: Colors.orange),
+            SizedBox(width: 8),
+            Text('Navigation'),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('Unable to open navigation automatically.'),
+            const SizedBox(height: 16),
+            const Text('You can manually enter these coordinates:'),
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.grey.shade100,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Latitude: ${widget.taskLocation.latitude}'),
+                  Text('Longitude: ${widget.taskLocation.longitude}'),
+                  const SizedBox(height: 8),
+                  Text('Location: ${widget.taskLocation.title}'),
+                ],
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              // Kopiraj koordinate u clipboard
+              final coordinates = '${widget.taskLocation.latitude}, ${widget.taskLocation.longitude}';
+              Clipboard.setData(ClipboardData(text: coordinates));
+              
+              Navigator.pop(context);
+              
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text('Coordinates copied to clipboard'),
+                  backgroundColor: Colors.green,
+                ),
+              );
+            },
+            child: const Text('Copy Coordinates'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
+  }
+  
+  /// Prikaži dialog sa opcijama navigacije
+  void _showNavigationOptions() {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Row(
+          children: [
+            Icon(Icons.navigation, color: Colors.blue),
+            SizedBox(width: 8),
+            Text('Navigate to Task'),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text('Navigate to: ${widget.taskLocation.title}'),
+            const SizedBox(height: 8),
+            Text(
+              'Get directions from your current location',
+              style: TextStyle(
+                fontSize: 14,
+                color: Colors.grey.shade600,
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton.icon(
+            onPressed: () {
+              Navigator.pop(context);
+              _navigateToTask();
+            },
+            icon: const Icon(Icons.navigation),
+            label: const Text('Navigate'),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.blue,
+              foregroundColor: Colors.white,
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   // Load map provider setting
@@ -839,6 +1136,9 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
                 const SizedBox(height: 12),
                 _buildTipItem(Icons.delete_forever, 'Clean up',
                     'Delete completed items to keep list clean'),
+                const SizedBox(height: 12),
+                _buildTipItem(Icons.navigation, 'Navigate to task', // ✅ DODATO
+                    'Get directions to your task location'),
               ],
             ),
           ),
@@ -973,6 +1273,10 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
      }
    }
 
+   final screenHeight = MediaQuery.of(context).size.height;
+   final appBarHeight = AppBar().preferredSize.height + MediaQuery.of(context).padding.top;
+   final availableHeight = screenHeight - appBarHeight;
+
    return WillPopScope(
      onWillPop: () async {
        if (widget.isLockScreenMode) {
@@ -1025,223 +1329,289 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
            ),
          ],
        ),
-       body: Column(
+       body: Stack(
          children: [
-           // HYBRID MAP PREVIEW - show current provider
+           // ✅ FULL SCREEN MAP (expands when bottom sheet is dragged down)
            Container(
-             height: 200,
-             child: _buildMapPreview(),
+             height: availableHeight,
+             child: Stack(
+               children: [
+                 _buildMapPreview(),
+                 
+                 // FAB - positioned above bottom sheet
+                 Positioned(
+                   bottom: availableHeight * _bottomSheetHeight + 20,
+                   right: 16,
+                   child: FloatingActionButton(
+                     onPressed: _navigateToTask,
+                     backgroundColor: Colors.blue,
+                     foregroundColor: Colors.white,
+                     mini: true,
+                     heroTag: "navigation_fab",
+                     child: const Icon(Icons.navigation, size: 20),
+                     tooltip: 'Navigate to Task',
+                   ),
+                 ),
+               ],
+             ),
            ),
 
-           // Task detail form
-           Expanded(
-             child: Padding(
-               padding: const EdgeInsets.all(16.0),
-               child: Column(
-                 children: [
-                   // Main card container
-                   Card(
-                     elevation: 4,
-                     child: Padding(
-                       padding: const EdgeInsets.all(20.0),
-                       child: Column(
-                         crossAxisAlignment: CrossAxisAlignment.start,
-                         children: [
-                           // Header with task icon and action buttons
-                           Row(
-                             children: [
-                               Icon(Icons.task_alt, color: _taskColor, size: 32),
-                               const Spacer(),
-
-                               // Calendar/Schedule button
-                               IconButton(
-                                 onPressed: () {
-                                   if (widget.taskLocation.hasScheduledTime || _linkedCalendarEvent != null) {
-                                     if (_linkedCalendarEvent != null) {
-                                       _navigateToCalendarEvent();
-                                     } else {
-                                       _showScheduleDialog();
-                                     }
-                                   } else {
-                                     _showScheduleDialog();
-                                   }
-                                 },
-                                 icon: Icon(
-                                   widget.taskLocation.hasScheduledTime
-                                       ? Icons.event
-                                       : Icons.schedule,
-                                   color: widget.taskLocation.hasScheduledTime
-                                       ? Colors.green
-                                       : Colors.orange,
-                                 ),
-                                 tooltip: widget.taskLocation.hasScheduledTime
-                                     ? 'View Schedule'
-                                     : 'Add Schedule',
-                               ),
-
-                               // Location button
-                               IconButton(
-                                 onPressed: _selectLocation,
-                                 icon: const Icon(Icons.location_on, color: Colors.blue),
-                                 tooltip: 'Change Location',
-                               ),
-
-                               // Color picker button
-                               IconButton(
-                                 onPressed: _showColorPicker,
-                                 icon: Icon(Icons.palette, color: _taskColor),
-                                 tooltip: 'Change Color',
-                               ),
-
-                               // Tips button
-                               IconButton(
-                                 onPressed: _showTips,
-                                 icon: const Icon(Icons.lightbulb_outline, color: Colors.orange),
-                                 tooltip: 'Show Tips',
-                               ),
-                             ],
+           // ✅ DRAGGABLE BOTTOM SHEET
+           Positioned(
+             left: 0,
+             right: 0,
+             bottom: 0,
+             height: availableHeight * _bottomSheetHeight,
+             child: GestureDetector(
+               onPanUpdate: (details) {
+                 setState(() {
+                   _bottomSheetHeight -= details.delta.dy / availableHeight;
+                   _bottomSheetHeight = _bottomSheetHeight.clamp(_minBottomSheetHeight, _maxBottomSheetHeight);
+                 });
+               },
+               child: Container(
+                 decoration: BoxDecoration(
+                   color: Theme.of(context).scaffoldBackgroundColor,
+                   borderRadius: const BorderRadius.only(
+                     topLeft: Radius.circular(20),
+                     topRight: Radius.circular(20),
+                   ),
+                   boxShadow: [
+                     BoxShadow(
+                       color: Colors.black.withOpacity(0.1),
+                       blurRadius: 10,
+                       offset: const Offset(0, -5),
+                     ),
+                   ],
+                 ),
+                 child: Column(
+                   children: [
+                     // ✅ DRAG HANDLE
+                     Container(
+                       width: double.infinity,
+                       padding: const EdgeInsets.symmetric(vertical: 12),
+                       child: Center(
+                         child: Container(
+                           width: 50,
+                           height: 5,
+                           decoration: BoxDecoration(
+                             color: Colors.grey.shade300,
+                             borderRadius: BorderRadius.circular(10),
                            ),
-
-                           const SizedBox(height: 20),
-
-                           // Task title
-                           TextField(
-                             controller: _titleController,
-                             decoration: InputDecoration(
-                               labelText: 'Task Title',
-                               border: const OutlineInputBorder(),
-                               prefixIcon: const Icon(Icons.title),
-                               filled: true,
-                               fillColor: Colors.grey.shade50,
-                               focusedBorder: OutlineInputBorder(
-                                 borderSide: BorderSide(color: _taskColor, width: 2),
-                               ),
-                             ),
-                             onChanged: (value) {
-                               _hasChanges = true;
-                             },
-                           ),
-
-                           const SizedBox(height: 20),
-
-                           // Add new item section
-                           Row(
-                             children: [
-                               Expanded(
-                                 child: TextField(
-                                   controller: _newItemController,
-                                   focusNode: _newItemFocusNode,
-                                   decoration: const InputDecoration(
-                                     labelText: 'Add New Item',
-                                     hintText: 'Enter new task item',
-                                     border: OutlineInputBorder(),
-                                     prefixIcon: Icon(Icons.add_task),
-                                   ),
-                                   onSubmitted: (_) => _addNewItem(),
-                                 ),
-                               ),
-                               const SizedBox(width: 8),
-                               FloatingActionButton.small(
-                                 onPressed: _addNewItem,
-                                 backgroundColor: Colors.teal,
-                                 child: const Icon(Icons.add, color: Colors.white),
-                               ),
-                             ],
-                           ),
-
-                           const SizedBox(height: 20),
-                         ],
+                         ),
                        ),
                      ),
-                   ),
 
-                   const SizedBox(height: 16),
+                     // ✅ TASK DETAIL CONTENT (scrollable)
+                     Expanded(
+                       child: SingleChildScrollView(
+                         padding: const EdgeInsets.all(16.0),
+                         child: Column(
+                           children: [
+                             // Main card container
+                             Card(
+                               elevation: 4,
+                               child: Padding(
+                                 padding: const EdgeInsets.all(20.0),
+                                 child: Column(
+                                   crossAxisAlignment: CrossAxisAlignment.start,
+                                   children: [
+                                     // Header with task icon and action buttons
+                                     Row(
+                                       children: [
+                                         Icon(Icons.task_alt, color: _taskColor, size: 32),
+                                         const Spacer(),
 
-                   // Task items section
-                   Expanded(
-                     child: SingleChildScrollView(
-                       child: Column(
-                         crossAxisAlignment: CrossAxisAlignment.start,
-                         children: [
-                           // Active tasks
-                           if (activeTasks.isNotEmpty) ...[
-                             Text(
-                               'Active Tasks (${activeTasks.length})',
-                               style: const TextStyle(
-                                 fontWeight: FontWeight.bold,
-                                 fontSize: 18,
-                               ),
-                             ),
-                             const SizedBox(height: 12),
-                             ...activeTasks,
-                           ],
+                                         // Calendar/Schedule button
+                                         IconButton(
+                                           onPressed: () {
+                                             if (widget.taskLocation.hasScheduledTime || _linkedCalendarEvent != null) {
+                                               if (_linkedCalendarEvent != null) {
+                                                 _navigateToCalendarEvent();
+                                               } else {
+                                                 _showScheduleDialog();
+                                               }
+                                             } else {
+                                               _showScheduleDialog();
+                                             }
+                                           },
+                                           icon: Icon(
+                                             widget.taskLocation.hasScheduledTime
+                                                 ? Icons.event
+                                                 : Icons.schedule,
+                                             color: widget.taskLocation.hasScheduledTime
+                                                 ? Colors.green
+                                                 : Colors.orange,
+                                           ),
+                                           tooltip: widget.taskLocation.hasScheduledTime
+                                               ? 'View Schedule'
+                                               : 'Add Schedule',
+                                         ),
 
-                           // Completed tasks
-                           if (completedTasks.isNotEmpty) ...[
-                             const SizedBox(height: 24),
-                             Text(
-                               'Completed Tasks (${completedTasks.length})',
-                               style: const TextStyle(
-                                 fontWeight: FontWeight.bold,
-                                 fontSize: 18,
-                               ),
-                             ),
-                             const SizedBox(height: 12),
-                             ...completedTasks,
+                                         // Location button
+                                         IconButton(
+                                           onPressed: _selectLocation,
+                                           icon: const Icon(Icons.location_on, color: Colors.blue),
+                                           tooltip: 'Change Location',
+                                         ),
 
-                             const SizedBox(height: 20),
-                             SizedBox(
-                               width: double.infinity,
-                               child: ElevatedButton.icon(
-                                 onPressed: _deleteCompletedTasks,
-                                 icon: const Icon(Icons.delete_forever),
-                                 label: const Text('Delete Completed Tasks'),
-                                 style: ElevatedButton.styleFrom(
-                                   backgroundColor: Colors.red.shade600,
-                                   foregroundColor: Colors.white,
-                                   padding: const EdgeInsets.symmetric(vertical: 16),
-                                   textStyle: const TextStyle(fontSize: 16),
+                                         // Color picker button
+                                         IconButton(
+                                           onPressed: _showColorPicker,
+                                           icon: Icon(Icons.palette, color: _taskColor),
+                                           tooltip: 'Change Color',
+                                         ),
+
+                                         // Tips button
+                                         IconButton(
+                                           onPressed: _showTips,
+                                           icon: const Icon(Icons.lightbulb_outline, color: Colors.orange),
+                                           tooltip: 'Show Tips',
+                                         ),
+                                       ],
+                                     ),
+
+                                     const SizedBox(height: 20),
+
+                                     // Task title
+                                     TextField(
+                                       controller: _titleController,
+                                       decoration: InputDecoration(
+                                         labelText: 'Task Title',
+                                         border: const OutlineInputBorder(),
+                                         prefixIcon: const Icon(Icons.title),
+                                         filled: true,
+                                         fillColor: Colors.grey.shade50,
+                                         focusedBorder: OutlineInputBorder(
+                                           borderSide: BorderSide(color: _taskColor, width: 2),
+                                         ),
+                                       ),
+                                       onChanged: (value) {
+                                         _hasChanges = true;
+                                       },
+                                     ),
+
+                                     const SizedBox(height: 20),
+
+                                     // Add new item section
+                                     Row(
+                                       children: [
+                                         Expanded(
+                                           child: TextField(
+                                             controller: _newItemController,
+                                             focusNode: _newItemFocusNode,
+                                             decoration: const InputDecoration(
+                                               labelText: 'Add New Item',
+                                               hintText: 'Enter new task item',
+                                               border: OutlineInputBorder(),
+                                               prefixIcon: Icon(Icons.add_task),
+                                             ),
+                                             onSubmitted: (_) => _addNewItem(),
+                                           ),
+                                         ),
+                                         const SizedBox(width: 8),
+                                         FloatingActionButton.small(
+                                           onPressed: _addNewItem,
+                                           backgroundColor: Colors.teal,
+                                           child: const Icon(Icons.add, color: Colors.white),
+                                         ),
+                                       ],
+                                     ),
+
+                                     const SizedBox(height: 20),
+                                   ],
                                  ),
                                ),
                              ),
-                           ],
 
-                           // Empty state
-                           if (activeTasks.isEmpty && completedTasks.isEmpty) ...[
-                             Center(
-                               child: Column(
-                                 children: [
-                                   const SizedBox(height: 40),
-                                   Icon(
-                                     Icons.task_alt,
-                                     size: 64,
-                                     color: Colors.grey.shade400,
-                                   ),
-                                   const SizedBox(height: 16),
+                             const SizedBox(height: 16),
+
+                             // Task items section
+                             Column(
+                               crossAxisAlignment: CrossAxisAlignment.start,
+                               children: [
+                                 // Active tasks
+                                 if (activeTasks.isNotEmpty) ...[
                                    Text(
-                                     'No task items yet',
-                                     style: TextStyle(
+                                     'Active Tasks (${activeTasks.length})',
+                                     style: const TextStyle(
+                                       fontWeight: FontWeight.bold,
                                        fontSize: 18,
-                                       color: Colors.grey.shade600,
                                      ),
                                    ),
-                                   const SizedBox(height: 8),
+                                   const SizedBox(height: 12),
+                                   ...activeTasks,
+                                 ],
+
+                                 // Completed tasks
+                                 if (completedTasks.isNotEmpty) ...[
+                                   const SizedBox(height: 24),
                                    Text(
-                                     'Add your first task item above',
-                                     style: TextStyle(
-                                       fontSize: 14,
-                                       color: Colors.grey.shade500,
+                                     'Completed Tasks (${completedTasks.length})',
+                                     style: const TextStyle(
+                                       fontWeight: FontWeight.bold,
+                                       fontSize: 18,
+                                     ),
+                                   ),
+                                   const SizedBox(height: 12),
+                                   ...completedTasks,
+
+                                   const SizedBox(height: 20),
+                                   SizedBox(
+                                     width: double.infinity,
+                                     child: ElevatedButton.icon(
+                                       onPressed: _deleteCompletedTasks,
+                                       icon: const Icon(Icons.delete_forever),
+                                       label: const Text('Delete Completed Tasks'),
+                                       style: ElevatedButton.styleFrom(
+                                         backgroundColor: Colors.red.shade600,
+                                         foregroundColor: Colors.white,
+                                         padding: const EdgeInsets.symmetric(vertical: 16),
+                                         textStyle: const TextStyle(fontSize: 16),
+                                       ),
                                      ),
                                    ),
                                  ],
-                               ),
+
+                                 // Empty state
+                                 if (activeTasks.isEmpty && completedTasks.isEmpty) ...[
+                                   Center(
+                                     child: Column(
+                                       children: [
+                                         const SizedBox(height: 40),
+                                         Icon(
+                                           Icons.task_alt,
+                                           size: 64,
+                                           color: Colors.grey.shade400,
+                                         ),
+                                         const SizedBox(height: 16),
+                                         Text(
+                                           'No task items yet',
+                                           style: TextStyle(
+                                             fontSize: 18,
+                                             color: Colors.grey.shade600,
+                                           ),
+                                         ),
+                                         const SizedBox(height: 8),
+                                         Text(
+                                           'Add your first task item above',
+                                           style: TextStyle(
+                                             fontSize: 14,
+                                             color: Colors.grey.shade500,
+                                           ),
+                                         ),
+                                       ],
+                                     ),
+                                   ),
+                                 ],
+                               ],
                              ),
                            ],
-                         ],
+                         ),
                        ),
                      ),
-                   ),
-                 ],
+                   ],
+                 ),
                ),
              ),
            ),
@@ -1308,6 +1678,243 @@ class _TaskDetailScreenWithStateState extends State<TaskDetailScreenWithState> {
    _newItemController.dispose();
    _newItemFocusNode.dispose();
    super.dispose();
+ }
+
+ // ✅ NAVIGACIJA ZA WITH STATE VERZIJU
+ Future<void> _navigateToTask() async {
+   try {
+     final lat = widget.selectedLocation.latitude;
+     final lng = widget.selectedLocation.longitude;
+     final taskTitle = Uri.encodeComponent(widget.taskLocation.title);
+     
+     // PRISTUP 1: Google Maps sa turn-by-turn navigacijom
+     final googleMapsNavUrl = 'google.navigation:q=$lat,$lng';
+     
+     if (await canLaunchUrl(Uri.parse(googleMapsNavUrl))) {
+       await launchUrl(
+         Uri.parse(googleMapsNavUrl),
+         mode: LaunchMode.externalApplication,
+       );
+       
+       if (mounted) {
+         ScaffoldMessenger.of(context).showSnackBar(
+           SnackBar(
+             content: Row(
+               children: [
+                 const Icon(Icons.navigation, color: Colors.white),
+                 const SizedBox(width: 8),
+                 Expanded(child: Text('Opening turn-by-turn navigation to ${widget.taskLocation.title}')),
+               ],
+             ),
+             backgroundColor: Colors.green,
+             duration: const Duration(seconds: 3),
+           ),
+         );
+       }
+       
+       return;
+     }
+     
+     // PRISTUP 2: Waze navigacija
+     final wazeUrl = 'waze://?ll=$lat,$lng&navigate=yes';
+     
+     if (await canLaunchUrl(Uri.parse(wazeUrl))) {
+       await launchUrl(
+         Uri.parse(wazeUrl),
+         mode: LaunchMode.externalApplication,
+       );
+       
+       if (mounted) {
+         ScaffoldMessenger.of(context).showSnackBar(
+           SnackBar(
+             content: Row(
+               children: [
+                 const Icon(Icons.navigation, color: Colors.white),
+                 const SizedBox(width: 8),
+                 Expanded(child: Text('Opening Waze navigation to ${widget.taskLocation.title}')),
+               ],
+             ),
+             backgroundColor: Colors.green,
+             duration: const Duration(seconds: 3),
+           ),
+         );
+       }
+       
+       return;
+     }
+     
+     // PRISTUP 3: Apple Maps sa directions (iOS)
+     if (Platform.isIOS) {
+       final appleMapsDirectionsUrl = 'http://maps.apple.com/?daddr=$lat,$lng&dirflg=d';
+       
+       if (await canLaunchUrl(Uri.parse(appleMapsDirectionsUrl))) {
+         await launchUrl(
+           Uri.parse(appleMapsDirectionsUrl),
+           mode: LaunchMode.externalApplication,
+         );
+         
+         if (mounted) {
+           ScaffoldMessenger.of(context).showSnackBar(
+             SnackBar(
+               content: Row(
+                 children: [
+                   const Icon(Icons.navigation, color: Colors.white),
+                   const SizedBox(width: 8),
+                   Expanded(child: Text('Opening Apple Maps directions to ${widget.taskLocation.title}')),
+                 ],
+               ),
+               backgroundColor: Colors.green,
+               duration: const Duration(seconds: 3),
+             ),
+           );
+         }
+         
+         return;
+       }
+     }
+     
+     // PRISTUP 4: Fallback - Google Maps web sa directions
+     final googleMapsWebDirectionsUrl = 'https://www.google.com/maps/dir/?api=1&destination=$lat,$lng';
+     
+     if (await canLaunchUrl(Uri.parse(googleMapsWebDirectionsUrl))) {
+       await launchUrl(
+         Uri.parse(googleMapsWebDirectionsUrl),
+         mode: LaunchMode.externalApplication,
+       );
+       
+       if (mounted) {
+         ScaffoldMessenger.of(context).showSnackBar(
+           const SnackBar(
+             content: Text('Opening web directions - Google Maps'),
+             backgroundColor: Colors.blue,
+           ),
+         );
+       }
+       
+       return;
+     }
+     
+     throw Exception('No navigation app available');
+     
+   } catch (e) {
+     if (mounted) {
+       _showNavigationFallbackDialog();
+     }
+   }
+ }
+
+ void _showNavigationFallbackDialog() {
+   showDialog(
+     context: context,
+     builder: (context) => AlertDialog(
+       title: const Row(
+         children: [
+           Icon(Icons.navigation, color: Colors.orange),
+           SizedBox(width: 8),
+           Text('Navigation'),
+         ],
+       ),
+       content: Column(
+         mainAxisSize: MainAxisSize.min,
+         crossAxisAlignment: CrossAxisAlignment.start,
+         children: [
+           const Text('Unable to open navigation automatically.'),
+           const SizedBox(height: 16),
+           const Text('You can manually enter these coordinates:'),
+           const SizedBox(height: 12),
+           Container(
+             padding: const EdgeInsets.all(12),
+             decoration: BoxDecoration(
+               color: Colors.grey.shade100,
+               borderRadius: BorderRadius.circular(8),
+             ),
+             child: Column(
+               crossAxisAlignment: CrossAxisAlignment.start,
+               children: [
+                 Text('Latitude: ${widget.selectedLocation.latitude}'),
+                 Text('Longitude: ${widget.selectedLocation.longitude}'),
+                 const SizedBox(height: 8),
+                 Text('Location: ${widget.selectedLocationName ?? widget.taskLocation.title}'),
+               ],
+             ),
+           ),
+         ],
+       ),
+       actions: [
+         TextButton(
+           onPressed: () {
+             final coordinates = '${widget.selectedLocation.latitude}, ${widget.selectedLocation.longitude}';
+             Clipboard.setData(ClipboardData(text: coordinates));
+             
+             Navigator.pop(context);
+             
+             ScaffoldMessenger.of(context).showSnackBar(
+               const SnackBar(
+                 content: Text('Coordinates copied to clipboard'),
+                 backgroundColor: Colors.green,
+               ),
+             );
+           },
+           child: const Text('Copy Coordinates'),
+         ),
+         TextButton(
+           onPressed: () => Navigator.pop(context),
+           child: const Text('OK'),
+         ),
+       ],
+     ),
+   );
+ }
+
+ void _showNavigationOptions() {
+   showDialog(
+     context: context,
+     builder: (context) => AlertDialog(
+       title: const Row(
+         children: [
+           Icon(Icons.navigation, color: Colors.blue),
+           SizedBox(width: 8),
+           Text('Navigate to Task'),
+         ],
+       ),
+       content: Column(
+         mainAxisSize: MainAxisSize.min,
+         children: [
+           Text('Navigate to: ${widget.taskLocation.title}'),
+           const SizedBox(height: 8),
+           if (widget.selectedLocationName != null) ...[
+             Text('Updated location: ${widget.selectedLocationName}'),
+             const SizedBox(height: 8),
+           ],
+           Text(
+             'Coordinates: ${widget.selectedLocation.latitude.toStringAsFixed(6)}, ${widget.selectedLocation.longitude.toStringAsFixed(6)}',
+             style: TextStyle(
+               fontSize: 12,
+               color: Colors.grey.shade600,
+             ),
+           ),
+         ],
+       ),
+       actions: [
+         TextButton(
+           onPressed: () => Navigator.pop(context),
+           child: const Text('Cancel'),
+         ),
+         ElevatedButton.icon(
+           onPressed: () {
+             Navigator.pop(context);
+             _navigateToTask();
+           },
+           icon: const Icon(Icons.navigation),
+           label: const Text('Navigate'),
+           style: ElevatedButton.styleFrom(
+             backgroundColor: Colors.blue,
+             foregroundColor: Colors.white,
+           ),
+         ),
+       ],
+     ),
+   );
  }
 
  // Load map provider setting
@@ -1553,10 +2160,29 @@ class _TaskDetailScreenWithStateState extends State<TaskDetailScreenWithState> {
        ),
        body: Column(
          children: [
-           // HYBRID MAP PREVIEW
+           // HYBRID MAP PREVIEW SA NAVIGATION FAB
            Container(
              height: 200,
-             child: _buildMapPreview(),
+             child: Stack(
+               children: [
+                 _buildMapPreview(),
+                 
+                 // ✅ FLOATING NAVIGATION BUTTON
+                 Positioned(
+                   bottom: 16,
+                   right: 16,
+                   child: FloatingActionButton(
+                     onPressed: _navigateToTask,
+                     backgroundColor: Colors.blue,
+                     foregroundColor: Colors.white,
+                     mini: true,
+                     heroTag: "navigation_fab_with_state",
+                     child: const Icon(Icons.navigation, size: 20),
+                     tooltip: 'Navigate to Task',
+                   ),
+                 ),
+               ],
+             ),
            ),
 
            // Task detail form with location banner
