@@ -22,6 +22,12 @@ import 'dart:async';
 import 'package:http/http.dart' as http;
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'dart:async';
+import 'package:geolocator/geolocator.dart';
+import 'package:app_settings/app_settings.dart';
+import 'package:device_info_plus/device_info_plus.dart';
+import 'dart:io';
+
 
 // Helper class for task distance calculations
 class TaskWithDistance {
@@ -126,6 +132,29 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
   // Load and cache task data
 	Future<void> _loadTaskData() async {
 	  print('🔄 LOAD TASK DATA: Starting to load task data...');
+	  
+	  final locationPermission = await Permission.locationWhenInUse.status;
+	  if (!locationPermission.isGranted) {
+		print('❌ LOCATION: Permission not granted, requesting...');
+		final result = await Permission.locationWhenInUse.request();
+		if (!result.isGranted) {
+		  print('❌ LOCATION: Permission denied by user');
+		  // Fallback bez location-based sorting
+		  setState(() {
+			_isLoadingTasks = true;
+		  });
+		  
+		  final tasks = await DatabaseHelper.instance.getAllTaskLocations();
+		  _cachedTasks = tasks;
+		  _cachedSortedTasks = tasks.map((task) => TaskWithDistance(task, 0.0)).toList();
+		  
+		  setState(() {
+			_isLoadingTasks = false;
+			_isLoadingDistance = false;
+		  });
+		  return;
+		}
+	  }
 	  
 	  setState(() {
 		_isLoadingTasks = true;
@@ -418,34 +447,160 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
     }
   }
 
-  // Sort tasks by distance with details
-  Future<List<TaskWithDistance>> _sortTasksByDistanceWithDetails(List<TaskLocation> tasks) async {
-    try {
-      final position = await LocationService.getCurrentLocation();
 
-      if (position == null) {
-        return tasks.map((task) => TaskWithDistance(task, 0.0)).toList();
-      }
+	// Sort tasks by distance with details - optimized for Huawei devices
+	Future<List<TaskWithDistance>> _sortTasksByDistanceWithDetails(List<TaskLocation> tasks) async {
+	 print('🔄 DISTANCE: Starting distance calculation for ${tasks.length} tasks');
+	 
+	 try {
+	   // Check location permission before accessing location
+	   final locationPermission = await Permission.locationWhenInUse.status;
+	   if (!locationPermission.isGranted) {
+		 print('❌ DISTANCE: Location permission not granted');
+		 final result = await Permission.locationWhenInUse.request();
+		 if (!result.isGranted) {
+		   print('❌ DISTANCE: Location permission denied by user');
+		   return tasks.map((task) => TaskWithDistance(task, 0.0)).toList();
+		 }
+	   }
 
-      List<TaskWithDistance> tasksWithDistance = [];
+	   print('🔄 DISTANCE: Getting current location...');
+	   
+	   // Add timeout and retry logic for Huawei devices
+	   Position? position;
+	   int retryCount = 0;
+	   const maxRetries = 3;
+	   
+	   while (position == null && retryCount < maxRetries) {
+		 try {
+		   position = await LocationService.getCurrentLocation()
+			   .timeout(const Duration(seconds: 10));
+		   
+		   if (position != null) {
+			 print('🔄 DISTANCE: Got location on attempt ${retryCount + 1}: ${position.latitude}, ${position.longitude}');
+			 break;
+		   }
+		 } on TimeoutException {
+		   retryCount++;
+		   print('❌ DISTANCE: Timeout on attempt $retryCount/$maxRetries');
+		   if (retryCount < maxRetries) {
+			 print('🔄 DISTANCE: Retrying in 2 seconds...');
+			 await Future.delayed(const Duration(seconds: 2));
+		   }
+		 } catch (e) {
+		   retryCount++;
+		   print('❌ DISTANCE: Error on attempt $retryCount/$maxRetries: $e');
+		   if (retryCount < maxRetries) {
+			 print('🔄 DISTANCE: Retrying in 2 seconds...');
+			 await Future.delayed(const Duration(seconds: 2));
+		   }
+		 }
+	   }
 
-      for (final task in tasks) {
-        final distance = _calculateDistance(
-          position.latitude,
-          position.longitude,
-          task.latitude,
-          task.longitude,
-        );
-        tasksWithDistance.add(TaskWithDistance(task, distance));
-      }
+	   // If no location after all attempts
+	   if (position == null) {
+		 print('❌ DISTANCE: Failed to get location after $maxRetries attempts');
+		 
+		 // Fallback: use default Vienna coordinates or last known location
+		 try {
+		   final prefs = await SharedPreferences.getInstance();
+		   final lastLat = prefs.getDouble('last_known_latitude');
+		   final lastLng = prefs.getDouble('last_known_longitude');
+		   
+		   if (lastLat != null && lastLng != null) {
+			 print('🔄 DISTANCE: Using last known location: $lastLat, $lastLng');
+			 position = Position(
+			   latitude: lastLat,
+			   longitude: lastLng,
+			   timestamp: DateTime.now(),
+			   accuracy: 0.0,
+			   altitude: 0.0,
+			   heading: 0.0,
+			   speed: 0.0,
+			   speedAccuracy: 0.0,
+			   altitudeAccuracy: 0.0,
+			   headingAccuracy: 0.0,
+			 );
+		   } else {
+			 print('🔄 DISTANCE: Using default Vienna coordinates');
+			 position = Position(
+			   latitude: 48.2082,
+			   longitude: 16.3738,
+			   timestamp: DateTime.now(),
+			   accuracy: 0.0,
+			   altitude: 0.0,
+			   heading: 0.0,
+			   speed: 0.0,
+			   speedAccuracy: 0.0,
+			   altitudeAccuracy: 0.0,
+			   headingAccuracy: 0.0,
+			 );
+		   }
+		 } catch (e) {
+		   print('❌ DISTANCE: Error accessing SharedPreferences: $e');
+		   // Return tasks without distance sorting
+		   return tasks.map((task) => TaskWithDistance(task, 0.0)).toList();
+		 }
+	   } else {
+		 // Save current location for future fallback
+		 try {
+		   final prefs = await SharedPreferences.getInstance();
+		   await prefs.setDouble('last_known_latitude', position.latitude);
+		   await prefs.setDouble('last_known_longitude', position.longitude);
+		   print('🔄 DISTANCE: Saved current location as last known');
+		 } catch (e) {
+		   print('❌ DISTANCE: Failed to save last known location: $e');
+		 }
+	   }
 
-      tasksWithDistance.sort((a, b) => a.distance.compareTo(b.distance));
-      return tasksWithDistance;
+	   print('🔄 DISTANCE: Calculating distances from ${position.latitude}, ${position.longitude}');
+	   
+	   List<TaskWithDistance> tasksWithDistance = [];
 
-    } catch (e) {
-      return tasks.map((task) => TaskWithDistance(task, 0.0)).toList();
-    }
-  }
+	   for (int i = 0; i < tasks.length; i++) {
+		 final task = tasks[i];
+		 try {
+		   final distance = _calculateDistance(
+			 position.latitude,
+			 position.longitude,
+			 task.latitude,
+			 task.longitude,
+		   );
+		   
+		   tasksWithDistance.add(TaskWithDistance(task, distance));
+		   
+		   // Debug first few tasks
+		   if (i < 3) {
+			 print('🔄 DISTANCE: Task "${task.title}": ${_formatDistance(distance)}');
+		   }
+		   
+		 } catch (e) {
+		   print('❌ DISTANCE: Error calculating distance for task "${task.title}": $e');
+		   tasksWithDistance.add(TaskWithDistance(task, 999999.0)); // Put at end
+		 }
+	   }
+
+	   // Sort by distance
+	   tasksWithDistance.sort((a, b) => a.distance.compareTo(b.distance));
+	   
+	   print('🔄 DISTANCE: Successfully sorted ${tasksWithDistance.length} tasks by distance');
+	   
+	   // Debug first few sorted tasks
+	   for (int i = 0; i < tasksWithDistance.length && i < 3; i++) {
+		 final twd = tasksWithDistance[i];
+		 print('🔄 DISTANCE: Sorted #${i + 1}: "${twd.task.title}" - ${_formatDistance(twd.distance)}');
+	   }
+	   
+	   return tasksWithDistance;
+
+	 } catch (e) {
+	   print('❌ DISTANCE: Unexpected error in _sortTasksByDistanceWithDetails: $e');
+	   print('❌ DISTANCE: Stack trace: ${StackTrace.current}');
+	   
+	   // Fallback: return tasks without sorting
+	   return tasks.map((task) => TaskWithDistance(task, 0.0)).toList();
+	 }
+	}
 
   // Toggle selection mode - optimized to avoid unnecessary rebuilds
   void _toggleSelectionMode() {
@@ -993,6 +1148,14 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
 			  iconColor: Colors.purple,
 			  onTap: _testTaskListRefresh,
 			),
+			
+		_buildMoreOption(
+		  icon: Icons.notifications_off,
+		  title: 'Fix Pop-up Notifications',
+		  subtitle: 'Turn off annoying notification pop-ups (Huawei)',
+		  iconColor: Colors.orange,
+		  onTap: _showHuaweiNotificationHelp,
+		),
 		  
 		  //const SizedBox(height: 8),
 
@@ -1855,6 +2018,150 @@ Future<void> _selectMapProvider(String provider) async {
 		setState(() {
 		  _isSearching = false;
 		});
+	  }
+	}
+	
+	Future<bool> _isHuaweiDevice() async {
+	  try {
+		DeviceInfoPlugin deviceInfo = DeviceInfoPlugin();
+		AndroidDeviceInfo androidInfo = await deviceInfo.androidInfo;
+		final manufacturer = androidInfo.manufacturer.toLowerCase();
+		final brand = androidInfo.brand.toLowerCase();
+		
+		return manufacturer.contains('huawei') || 
+			   brand.contains('huawei') ||
+			   manufacturer.contains('honor') ||
+			   brand.contains('honor');
+	  } catch (e) {
+		return false;
+	  }
+	}
+
+	Future<void> _showHuaweiNotificationHelp() async {
+	  final isHuawei = await _isHuaweiDevice();
+	  
+	  if (!isHuawei) {
+		ScaffoldMessenger.of(context).showSnackBar(
+		  const SnackBar(content: Text('This feature is for Huawei devices only')),
+		);
+		return;
+	  }
+
+	  showDialog(
+		context: context,
+		builder: (context) => AlertDialog(
+		  title: Text('Turn Off Pop-ups'),
+		  content: Container(
+			height: 200,
+			child: Column(
+			  children: [
+				Text('1. Settings → Apps → Locado'),
+				Text('2. Tap "Notifications"'),
+				Text('3. Turn off "Banner notifications"'),
+				Text('4. Keep "Status bar" ON'),
+			  ],
+			),
+		  ),
+		  actions: [
+			TextButton(
+			  onPressed: () => Navigator.pop(context),
+			  child: Text('Cancel'),
+			),
+			ElevatedButton(
+			  onPressed: () {
+				Navigator.pop(context);
+				AppSettings.openAppSettings(type: AppSettingsType.notification);
+			  },
+			  child: Text('Open Settings'),
+			),
+		  ],
+		),
+	  );
+	}
+
+	// Helper widget za instrukcije
+	Widget _buildInstructionStep(String number, String title, String description, IconData icon) {
+	  return Row(
+		crossAxisAlignment: CrossAxisAlignment.start,
+		children: [
+		  Container(
+			width: 24,
+			height: 24,
+			decoration: BoxDecoration(
+			  color: Colors.orange,
+			  shape: BoxShape.circle,
+			),
+			child: Center(
+			  child: Text(
+				number,
+				style: TextStyle(
+				  color: Colors.white,
+				  fontSize: 12,
+				  fontWeight: FontWeight.bold,
+				),
+			  ),
+			),
+		  ),
+		  SizedBox(width: 12),
+		  Icon(icon, color: Colors.orange, size: 20),
+		  SizedBox(width: 8),
+		  Expanded(
+			child: Column(
+			  crossAxisAlignment: CrossAxisAlignment.start,
+			  children: [
+				Text(
+				  title,
+				  style: TextStyle(
+					fontWeight: FontWeight.w600,
+					fontSize: 14,
+				  ),
+				),
+				SizedBox(height: 2),
+				Text(
+				  description,
+				  style: TextStyle(
+					color: Colors.grey.shade600,
+					fontSize: 12,
+				  ),
+				),
+			  ],
+			),
+		  ),
+		],
+	  );
+	}
+
+	// Otvara notification settings
+	Future<void> _openNotificationSettings() async {
+	  try {
+		await AppSettings.openAppSettings(type: AppSettingsType.notification);
+		
+		// Prikaži success message nakon kratke pauze
+		Future.delayed(Duration(seconds: 1), () {
+		  if (mounted) {
+			ScaffoldMessenger.of(context).showSnackBar(
+			  SnackBar(
+				content: Row(
+				  children: [
+					Icon(Icons.info, color: Colors.white),
+					SizedBox(width: 8),
+					Text('Look for notification categories and turn off pop-ups'),
+				  ],
+				),
+				backgroundColor: Colors.orange,
+				duration: Duration(seconds: 4),
+			  ),
+			);
+		  }
+		});
+		
+	  } catch (e) {
+		ScaffoldMessenger.of(context).showSnackBar(
+		  SnackBar(
+			content: Text('Could not open settings: $e'),
+			backgroundColor: Colors.red,
+		  ),
+		);
 	  }
 	}
 }

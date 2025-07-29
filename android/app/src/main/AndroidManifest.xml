@@ -132,6 +132,11 @@
         <meta-data
             android:name="com.google.android.geo.API_KEY"
             android:value="${googleMapsApiKey}" />
+			
+	    <meta-data
+			android:name="com.huawei.hms.location.LocationService"
+			android:value="true" />
+
 
 
     <!-- FOREGROUND SERVICE -->
@@ -193,6 +198,38 @@
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />
+			
+    <!-- Silent notification configuration -->
+    <meta-data
+        android:name="flutter_foreground_task.notification_channel_importance"
+        android:value="1" />
+    <meta-data
+        android:name="flutter_foreground_task.notification_priority"
+        android:value="-2" />
+    <meta-data
+        android:name="flutter_foreground_task.notification_sound"
+        android:value="false" />
+    <meta-data
+        android:name="flutter_foreground_task.notification_vibration"
+        android:value="false" />
+    <meta-data
+        android:name="flutter_foreground_task.notification_show_badge"
+        android:value="false" />
+    <meta-data
+        android:name="flutter_foreground_task.notification_visibility"
+        android:value="0" />
+    <meta-data
+        android:name="flutter_foreground_task.notification_ongoing"
+        android:value="true" />
+    <meta-data
+        android:name="flutter_foreground_task.notification_auto_cancel"
+        android:value="false" />
+    <meta-data
+        android:name="flutter_foreground_task.notification_content_title"
+        android:value="" />
+    <meta-data
+        android:name="flutter_foreground_task.notification_content_text"
+        android:value="" />
 
     </application>
 
