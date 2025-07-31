@@ -18,6 +18,8 @@ import '../screens/search_location_screen.dart';
 import '../screens/event_details_screen.dart';
 import 'package:flutter/services.dart';
 import '../widgets/osm_map_widget.dart';
+import 'package:device_info_plus/device_info_plus.dart';
+import 'dart:io';
 
 // Enum for map provider selection
 enum MapProvider { googleMaps, openStreetMap }
@@ -946,39 +948,204 @@ class _TaskDetailScreenState extends State<TaskDetailScreen>
     Share.share(taskText.toString());
   }
 
-  Future<void> _exportTaskAsFile() async {
-    try {
-      final task = widget.taskLocation;
+	Future<void> _exportTaskAsFile() async {
+	  try {
+		final task = widget.taskLocation;
 
-      final exportMap = {
-        "id": task.id,
-        "title": task.title,
-        "latitude": task.latitude,
-        "longitude": task.longitude,
-        "colorHex": task.colorHex,
-        "taskItems": task.taskItems,
-        "scheduledDateTime": task.scheduledDateTime?.toIso8601String(),
-        "linkedCalendarEventId": task.linkedCalendarEventId,
-      };
+		// ✅ KREIRAJ LOCADO SADRŽAJ
+		final exportMap = {
+		  "locado_version": "1.0",
+		  "export_type": "task_share", 
+		  "export_timestamp": DateTime.now().toIso8601String(),
+		  "app_version": "1.0.0",
+		  "task_data": {
+			"id": task.id,
+			"title": task.title,
+			"latitude": task.latitude,
+			"longitude": task.longitude,
+			"colorHex": task.colorHex,
+			"taskItems": task.taskItems,
+			"scheduledDateTime": task.scheduledDateTime?.toIso8601String(),
+			"linkedCalendarEventId": task.linkedCalendarEventId,
+		  }
+		};
 
-      final jsonString = jsonEncode(exportMap);
-      final directory = await getTemporaryDirectory();
-      final safeTitle = task.title.replaceAll(RegExp(r'[\\/:*?"<>|]'), '_');
-      final filePath = '${directory.path}/$safeTitle.json';
+		final jsonString = jsonEncode(exportMap);
+		final directory = await getTemporaryDirectory();
+		final safeTitle = task.title.replaceAll(RegExp(r'[\\/:*?"<>|]'), '_');
+		
+		// ✅ SMART DETECTION: Detekcija instalirane aplikacije
+		final useJsonFormat = await _shouldUseJsonFormat();
+		
+		final fileName = useJsonFormat 
+			? '${safeTitle}_task.json' 
+			: '${safeTitle}_task.locado';
+		
+		final mimeType = useJsonFormat 
+			? 'application/json' 
+			: 'application/x-locado';
+		
+		final filePath = '${directory.path}/$fileName';
 
-      final file = File(filePath);
-      await file.writeAsString(jsonString);
+		// Kreiraj fajl
+		final file = File(filePath);
+		await file.writeAsString(jsonString);
 
-      final xfile = XFile(file.path, mimeType: 'application/json');
+		// ✅ DIJELI AUTOMATSKI ODABRANI FORMAT
+		final xfile = XFile(file.path, mimeType: mimeType);
 
-      await Share.shareXFiles([xfile], text: 'Exported task: ${task.title}');
-    } catch (e) {
-      print("Export error: $e");
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error exporting task: $e')),
-      );
-    }
-  }
+		await Share.shareXFiles(
+		  [xfile], 
+		  text: '''📍 Locado Task: ${task.title}
+
+	Open this file with Locado app to import the task!''',
+		  subject: 'Shared Locado Task: ${task.title}',
+		);
+
+		// ✅ USPJEH PORUKA SA INFO O FORMATU
+		final formatInfo = useJsonFormat ? '.json (compatible mode)' : '.locado (standard)';
+		
+		ScaffoldMessenger.of(context).showSnackBar(
+		  SnackBar(
+			content: Column(
+			  mainAxisSize: MainAxisSize.min,
+			  crossAxisAlignment: CrossAxisAlignment.start,
+			  children: [
+				Row(
+				  children: [
+					const Icon(Icons.share, color: Colors.white, size: 20),
+					const SizedBox(width: 8),
+					const Text('Task exported successfully!'),
+				  ],
+				),
+				const SizedBox(height: 4),
+				Text(
+				  'Format: $formatInfo',
+				  style: TextStyle(
+					fontSize: 12,
+					color: Colors.white70,
+				  ),
+				),
+			  ],
+			),
+			backgroundColor: Colors.green,
+			duration: const Duration(seconds: 3),
+		  ),
+		);
+
+		print('✅ EXPORT: Created file: $filePath (format: $formatInfo)');
+
+	  } catch (e) {
+		print("❌ EXPORT ERROR: $e");
+		ScaffoldMessenger.of(context).showSnackBar(
+		  SnackBar(
+			content: Row(
+			  children: [
+				const Icon(Icons.error, color: Colors.white),
+				const SizedBox(width: 8),
+				Expanded(child: Text('Export error: $e')),
+			  ],
+			),
+			backgroundColor: Colors.red,
+		  ),
+		);
+	  }
+	}
+	
+	// ✅ SMART DETECTION LOGIKA
+	Future<bool> _shouldUseJsonFormat() async {
+	  try {
+		// ✅ JEDNOSTAVNA DETEKCIJA - provjeri da li je Huawei uređaj
+		final isHuawei = await _isHuaweiDevice();
+		
+		if (isHuawei) {
+		  print('🔍 SMART DETECTION: Huawei device detected, defaulting to .json for Viber compatibility');
+		  return true; // Huawei korisnici često koriste Viber
+		}
+		
+		// ✅ FALLBACK: Provjeri osnovne indikatore
+		final deviceInfo = await _getBasicDeviceInfo();
+		
+		// Ako ne možemo detektovati, koristimo sigurni .json na nepoznatim uređajima
+		if (deviceInfo['isUnknown'] == true) {
+		  print('🔍 SMART DETECTION: Unknown device, using .json for compatibility');
+		  return true;
+		}
+		
+		print('🔍 SMART DETECTION: Standard device, using .locado format');
+		return false; // Default na .locado
+		
+	  } catch (e) {
+		print('⚠️ SMART DETECTION: Error in detection, defaulting to .json for safety: $e');
+		return true; // Sigurni fallback na .json
+	  }
+	}
+	
+	Future<Map<String, dynamic>> _getBasicDeviceInfo() async {
+	  try {
+		final deviceInfo = DeviceInfoPlugin();
+		
+		if (Platform.isAndroid) {
+		  final androidInfo = await deviceInfo.androidInfo;
+		  
+		  return {
+			'manufacturer': androidInfo.manufacturer,
+			'brand': androidInfo.brand,
+			'model': androidInfo.model,
+			'isUnknown': false,
+		  };
+		}
+		
+		return {'isUnknown': true};
+	  } catch (e) {
+		return {'isUnknown': true};
+	  }
+	}
+	
+	Future<bool> _isHuaweiDevice() async {
+	  try {
+		// Koristi device_info_plus package
+		final deviceInfo = DeviceInfoPlugin();
+		
+		if (Platform.isAndroid) {
+		  final androidInfo = await deviceInfo.androidInfo;
+		  final manufacturer = androidInfo.manufacturer.toLowerCase();
+		  final brand = androidInfo.brand.toLowerCase();
+		  
+		  return manufacturer.contains('huawei') || 
+				 brand.contains('huawei') ||
+				 manufacturer.contains('honor') ||
+				 brand.contains('honor');
+		}
+		
+		return false;
+	  } catch (e) {
+		print('⚠️ HUAWEI DETECTION: Error checking device: $e');
+		return false;
+	  }
+	}
+
+	// ✅ HELPER: Dobijanje liste instaliranih aplikacija
+	Future<List<String>> _getInstalledApps() async {
+	  try {
+		// Koristimo device_apps package ili platform channel
+		// Za sada, simuliramo detekciju preko Android platform channel
+		
+		const platform = MethodChannel('com.example.locado_final/app_detection');
+		final List<dynamic> apps = await platform.invokeMethod('getInstalledApps');
+		
+		return apps.cast<String>();
+	  } catch (e) {
+		print('⚠️ APP DETECTION: Failed to get installed apps: $e');
+		
+		// Fallback: Pretpostavi da postoje standardne aplikacije
+		return [
+		  'com.whatsapp',
+		  'com.viber.voip',
+		  'com.google.android.gm',
+		];
+	  }
+	}
 
   void _selectLocation() async {
     FocusScope.of(context).unfocus();
@@ -1314,7 +1481,7 @@ class _TaskDetailScreenState extends State<TaskDetailScreen>
            ),
            IconButton(
              icon: const Icon(Icons.share),
-             onPressed: _shareTask,
+             onPressed: _exportTaskAsFile,
              tooltip: 'Share Task',
            ),
            IconButton(

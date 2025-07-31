@@ -67,10 +67,54 @@
                 android:name="io.flutter.embedding.android.NormalTheme"
                 android:resource="@style/NormalTheme" />
 
+            <!-- GLAVNI LAUNCHER INTENT -->
             <intent-filter android:autoVerify="true">
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
+
+            <!-- ✅ NOVO: INTENT FILTER ZA .LOCADO FAJLOVE -->
+            <intent-filter android:autoVerify="true" android:priority="1000">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                
+                <!-- Za .locado fajlove iz file managera -->
+                <data android:scheme="file" />
+                <data android:mimeType="*/*" />
+                <data android:pathPattern=".*\\.locado" />
+                <data android:host="*" />
+            </intent-filter>
+
+            <!-- ✅ NOVO: INTENT FILTER ZA CONTENT URI (dijeljanje preko aplikacija) -->
+            <intent-filter android:autoVerify="true" android:priority="1000">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                
+                <!-- Za content URI kada se dijeli preko WhatsApp, Viber, itd. -->
+                <data android:scheme="content" />
+                <data android:mimeType="*/*" />
+                <data android:pathPattern=".*\\.locado" />
+            </intent-filter>
+
+            <!-- ✅ NOVO: INTENT FILTER ZA CUSTOM MIME TYPE -->
+            <intent-filter android:autoVerify="true" android:priority="1000">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:mimeType="application/x-locado" />
+            </intent-filter>
+
+            <!-- ✅ NOVO: INTENT FILTER ZA GENERIC APPLICATION/OCTET-STREAM -->
+            <intent-filter android:autoVerify="true" android:priority="999">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:mimeType="application/octet-stream" />
+                <data android:pathPattern=".*\\.locado" />
+            </intent-filter>
+
         </activity>
 
         <!-- POSTOJEĆA FULL SCREEN ACTIVITY -->
@@ -137,9 +181,7 @@
 			android:name="com.huawei.hms.location.LocationService"
 			android:value="true" />
 
-
-
-    <!-- FOREGROUND SERVICE -->
+        <!-- FOREGROUND SERVICE -->
         <service
             android:name=".LocadoForegroundService"
             android:enabled="true"
@@ -199,37 +241,37 @@
             android:name="flutterEmbedding"
             android:value="2" />
 			
-    <!-- Silent notification configuration -->
-    <meta-data
-        android:name="flutter_foreground_task.notification_channel_importance"
-        android:value="1" />
-    <meta-data
-        android:name="flutter_foreground_task.notification_priority"
-        android:value="-2" />
-    <meta-data
-        android:name="flutter_foreground_task.notification_sound"
-        android:value="false" />
-    <meta-data
-        android:name="flutter_foreground_task.notification_vibration"
-        android:value="false" />
-    <meta-data
-        android:name="flutter_foreground_task.notification_show_badge"
-        android:value="false" />
-    <meta-data
-        android:name="flutter_foreground_task.notification_visibility"
-        android:value="0" />
-    <meta-data
-        android:name="flutter_foreground_task.notification_ongoing"
-        android:value="true" />
-    <meta-data
-        android:name="flutter_foreground_task.notification_auto_cancel"
-        android:value="false" />
-    <meta-data
-        android:name="flutter_foreground_task.notification_content_title"
-        android:value="" />
-    <meta-data
-        android:name="flutter_foreground_task.notification_content_text"
-        android:value="" />
+        <!-- Silent notification configuration -->
+        <meta-data
+            android:name="flutter_foreground_task.notification_channel_importance"
+            android:value="1" />
+        <meta-data
+            android:name="flutter_foreground_task.notification_priority"
+            android:value="-2" />
+        <meta-data
+            android:name="flutter_foreground_task.notification_sound"
+            android:value="false" />
+        <meta-data
+            android:name="flutter_foreground_task.notification_vibration"
+            android:value="false" />
+        <meta-data
+            android:name="flutter_foreground_task.notification_show_badge"
+            android:value="false" />
+        <meta-data
+            android:name="flutter_foreground_task.notification_visibility"
+            android:value="0" />
+        <meta-data
+            android:name="flutter_foreground_task.notification_ongoing"
+            android:value="true" />
+        <meta-data
+            android:name="flutter_foreground_task.notification_auto_cancel"
+            android:value="false" />
+        <meta-data
+            android:name="flutter_foreground_task.notification_content_title"
+            android:value="" />
+        <meta-data
+            android:name="flutter_foreground_task.notification_content_text"
+            android:value="" />
 
     </application>
 
@@ -241,6 +283,16 @@
         </intent>
         <intent>
             <action android:name="android.settings.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+        </intent>
+        
+        <!-- ✅ NOVO: QUERIES ZA .LOCADO FAJLOVE -->
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:mimeType="application/x-locado" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:mimeType="application/octet-stream" />
         </intent>
     </queries>
 

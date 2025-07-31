@@ -16,6 +16,10 @@ import 'services/onboarding_service.dart';
 import 'theme/theme_provider.dart';
 import 'theme/app_theme.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
+import 'package:google_maps_flutter/google_maps_flutter.dart';
+
+// ✅ NOVO: Dodaj file intent handler
+import 'helpers/file_intent_handler.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -49,6 +53,14 @@ void main() async {
 
   // Initialize app-level geofencing
   await AppGeofencingController.instance.initializeApp();
+
+  // ✅ NOVO: Initialize file intent handler for .locado files
+  try {
+    FileIntentHandler.initialize();
+    print('✅ MAIN: File intent handler initialized');
+  } catch (e) {
+    print('⚠️ MAIN: File intent handler initialization failed: $e');
+  }
 
   runApp(const MyApp());
 }
@@ -94,6 +106,9 @@ Future<String> _getLocalTimeZone() async {
 
 /// 🆕 TASK DETAIL APP ZA LOCK SCREEN (with theme support)
 class TaskDetailApp extends StatelessWidget {
+  // ✅ NOVO: Navigator key za task detail app
+  static final GlobalKey<NavigatorState> taskDetailNavigatorKey = GlobalKey<NavigatorState>();
+
   @override
   Widget build(BuildContext context) {
     return ChangeNotifierProvider(
@@ -102,6 +117,7 @@ class TaskDetailApp extends StatelessWidget {
         return Consumer<ThemeProvider>(
           builder: (context, themeProvider, child) {
             return MaterialApp(
+              navigatorKey: taskDetailNavigatorKey, // ✅ NOVO: Dodano
               debugShowCheckedModeBanner: false,
               title: 'Locado Task Detail',
               theme: AppTheme.lightTheme,
@@ -120,6 +136,9 @@ class TaskDetailApp extends StatelessWidget {
 class MyApp extends StatelessWidget {
   const MyApp({super.key});
 
+  // ✅ NOVO: Global navigator key za file intent handler
+  static final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
+
   @override
   Widget build(BuildContext context) {
     return ChangeNotifierProvider(
@@ -128,6 +147,7 @@ class MyApp extends StatelessWidget {
         return Consumer<ThemeProvider>(
           builder: (context, themeProvider, child) {
             return MaterialApp(
+              navigatorKey: navigatorKey, // ✅ NOVO: Dodano za file intent handling
               debugShowCheckedModeBanner: false,
               title: 'Locado',
               theme: AppTheme.lightTheme,
@@ -145,6 +165,105 @@ class MyApp extends StatelessWidget {
           },
         );
       },
+    );
+  }
+}
+
+// ✅ NOVO: Navigation service za file intent handler
+class NavigationService {
+  static GlobalKey<NavigatorState> navigatorKey = MyApp.navigatorKey;
+  
+  static BuildContext? get currentContext => navigatorKey.currentContext;
+  
+  static NavigatorState? get navigator => navigatorKey.currentState;
+  
+  /// Navigate to main screen with optional selected location
+  static Future<void> navigateToMainScreen({LatLng? selectedLocation}) async {
+    final context = currentContext;
+    if (context != null) {
+      print('🔗 NAVIGATION: Navigating to main screen with location: $selectedLocation');
+      
+      await Navigator.pushAndRemoveUntil(
+        context,
+        MaterialPageRoute(
+          builder: (context) => MainNavigationScreen(
+            selectedLocation: selectedLocation,
+          ),
+        ),
+        (route) => false, // Remove all previous routes
+      );
+    } else {
+      print('❌ NAVIGATION: No context available for navigation');
+    }
+  }
+  
+  /// Navigate to home route
+  static Future<void> navigateToHome() async {
+    final context = currentContext;
+    if (context != null) {
+      await Navigator.pushNamedAndRemoveUntil(
+        context,
+        '/',
+        (route) => false,
+      );
+    }
+  }
+  
+  /// Show snackbar message
+  static void showSnackBar({
+    required String message,
+    Color? backgroundColor,
+    IconData? icon,
+    Duration? duration,
+    SnackBarAction? action,
+  }) {
+    final context = currentContext;
+    if (context != null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Row(
+            children: [
+              if (icon != null) ...[
+                Icon(icon, color: Colors.white, size: 20),
+                const SizedBox(width: 8),
+              ],
+              Expanded(child: Text(message)),
+            ],
+          ),
+          backgroundColor: backgroundColor ?? Colors.green,
+          duration: duration ?? const Duration(seconds: 3),
+          action: action,
+        ),
+      );
+    }
+  }
+  
+  /// Show error message
+  static void showError(String message) {
+    showSnackBar(
+      message: message,
+      backgroundColor: Colors.red,
+      icon: Icons.error,
+      duration: const Duration(seconds: 5),
+    );
+  }
+  
+  /// Show success message
+  static void showSuccess(String message, {SnackBarAction? action}) {
+    showSnackBar(
+      message: message,
+      backgroundColor: Colors.green,
+      icon: Icons.check_circle,
+      action: action,
+    );
+  }
+  
+  /// Show info message
+  static void showInfo(String message) {
+    showSnackBar(
+      message: message,
+      backgroundColor: Colors.blue,
+      icon: Icons.info,
     );
   }
 }

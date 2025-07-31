@@ -34,12 +34,20 @@ class MainActivity: FlutterActivity() {
     }
 
     private lateinit var geofenceManager: GeofenceManager
+    
+    // ✅ NOVO: FileIntentPlugin instance
+    private var fileIntentPlugin: FileIntentPlugin? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
 
         // 🚀 INITIALIZE HIBRIDNI SISTEM
         initializeHybridSystem()
+        
+        // ✅ NOVO: Setup FileIntentPlugin
+        fileIntentPlugin = FileIntentPlugin(this)
+        fileIntentPlugin?.setupChannel(flutterEngine)
+        android.util.Log.d(TAG, "✅ FileIntentPlugin configured")
 
         // ✅ SETUP EVENT CHANNEL ZA FLUTTER UI UPDATES (OPTIONAL)
         EventChannel(flutterEngine.dartExecutor.binaryMessenger, EVENT_CHANNEL)
@@ -704,6 +712,23 @@ class MainActivity: FlutterActivity() {
                     }
                 }
             }
+						
+			MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "com.example.locado_final/app_detection")
+				.setMethodCallHandler { call, result ->
+					when (call.method) {
+						"getInstalledApps" -> {
+							try {
+								val packageManager = packageManager
+								val installedApps = packageManager.getInstalledPackages(0)
+								val appPackages = installedApps.map { it.packageName }
+								result.success(appPackages)
+							} catch (e: Exception) {
+								result.error("APP_DETECTION_ERROR", e.message, null)
+							}
+						}
+						else -> result.notImplemented()
+					}
+				}
     }
 
     /**
@@ -835,6 +860,9 @@ class MainActivity: FlutterActivity() {
 
         // Check if launched with task detail intent
         checkForTaskDetailIntent()
+        
+        // ✅ NOVO: Handle initial intent (kada se app otvori preko .locado fajla)
+        handleInitialIntent(intent)
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -843,6 +871,22 @@ class MainActivity: FlutterActivity() {
 
         // Check for task detail intent on new intent
         checkForTaskDetailIntent()
+        
+        // ✅ NOVO: Handle new intent (kada app već radi i prima novi .locado fajl)
+        android.util.Log.d(TAG, "🔗 Received new intent: ${intent.action}")
+        handleInitialIntent(intent)
+    }
+    
+    // ✅ NOVO: Private metoda za handling .locado file intents
+    private fun handleInitialIntent(intent: Intent?) {
+        if (intent != null) {
+            android.util.Log.d(TAG, "🔍 Checking intent: action=${intent.action}, data=${intent.data}")
+            
+            if (intent.action == Intent.ACTION_VIEW && intent.data != null) {
+                android.util.Log.d(TAG, "📁 Found file intent, delegating to FileIntentPlugin")
+                fileIntentPlugin?.handleFileIntent(intent)
+            }
+        }
     }
 
     private fun checkForTaskDetailIntent() {

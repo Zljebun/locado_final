@@ -1306,7 +1306,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
       ),
     );
   }
-
+  
   void _focusOnTask(TaskLocation task) {
     // Switch to map tab first
     setState(() {
@@ -1693,19 +1693,20 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
       });
     }
   }
-  
-  // NEW METHODS for map provider setting
+ 
 Future<void> _loadMapProviderDisplay() async {
   try {
     final prefs = await SharedPreferences.getInstance();
-    final useOSM = prefs.getBool('use_openstreetmap') ?? false;
+    
+    // ✅ FORSIRAJ OSM
+    await prefs.setBool('use_openstreetmap', true);
     
     setState(() {
-      _currentMapProvider = useOSM ? 'OpenStreetMap' : 'Google Maps';
+      _currentMapProvider = 'OpenStreetMap';
     });
   } catch (e) {
     setState(() {
-      _currentMapProvider = 'Google Maps';
+      _currentMapProvider = 'OpenStreetMap';
     });
   }
 }
