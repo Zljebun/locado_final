@@ -9,6 +9,7 @@ import 'package:google_maps_flutter/google_maps_flutter.dart';
 import '../models/task_location.dart';
 import '../helpers/database_helper.dart';
 import '../screens/main_navigation_screen.dart';
+import '../screens/task_detail_screen.dart';
 import '../main.dart';
 
 class FileIntentHandler {
@@ -245,37 +246,58 @@ class FileIntentHandler {
     return true;
   }
 
-  /// Navigate to main screen and focus on imported task - SUPER SIMPLE FIX
-  static Future<void> _navigateToImportedTask(TaskLocation task) async {
-    try {
-      print('🔗 SIMPLE FIX: Starting import focus for: ${task.title}');
-      print('🔗 SIMPLE FIX: Task coordinates: ${task.latitude}, ${task.longitude}');
-      
-      // ✅ SIMPLE APPROACH: Use the EXACT same logic as FAB button and long press
-      final taskLocation = LatLng(task.latitude, task.longitude);
-      await NavigationService.navigateToMainScreen(selectedLocation: taskLocation);
-      
-      print('🔗 SIMPLE FIX: Main screen navigation completed');
+  /// Navigate to main screen and focus on imported task 
+	static Future<void> _navigateToImportedTask(TaskLocation task) async {
+	  try {
+		print('🔥 DEBUG: _navigateToImportedTask called with task: ${task.title}');
+		print('🔗 IMPORT: Opening TaskDetailScreen for: ${task.title}');
+		
+		final navigatorKey = NavigationService.navigatorKey;
+		final context = navigatorKey.currentContext;
+		
+		print('🔥 DEBUG: Navigator context: ${context != null ? "AVAILABLE" : "NULL"}');
+		
+		if (context != null) {
+		  print('🔥 DEBUG: Using existing app instance');
+		  
+		  // ✅ DIREKTNO OTVORI TaskDetailScreen - BEZ IKAKVIH NavigationService poziva
+		  final result = await Navigator.push(
+			context,
+			MaterialPageRoute(
+			  builder: (ctx) => TaskDetailScreen(taskLocation: task),
+			),
+		  );
+		  
+		  print('🔥 DEBUG: TaskDetailScreen closed with result: $result');
+		  
+		  // Show success message
+		  if (context.mounted) {
+			ScaffoldMessenger.of(context).showSnackBar(
+			  SnackBar(
+				content: Row(
+				  children: [
+					const Icon(Icons.file_download, color: Colors.white),
+					const SizedBox(width: 8),
+					Expanded(child: Text('Task "${task.title}" imported successfully!')),
+				  ],
+				),
+				backgroundColor: Colors.green,
+				duration: const Duration(seconds: 3),
+			  ),
+			);
+		  }
+		  
+		} else {
+		  print('🔥 DEBUG: No context available - app may not be running');
+		  // ✅ FALLBACK - samo pokaži error, ne pokušavaj pokretanje
+		  _showImportError('Cannot open task - app not ready');
+		}
 
-      // Show success message
-      Future.delayed(const Duration(milliseconds: 500), () {
-        NavigationService.showSuccess(
-          'Task "${task.title}" imported successfully!',
-          action: SnackBarAction(
-            label: 'View on Map',
-            textColor: Colors.white,
-            onPressed: () {
-              // Additional action if needed
-            },
-          ),
-        );
-      });
-
-    } catch (e) {
-      print('❌ SIMPLE FIX ERROR: $e');
-      _showImportError('Failed to open imported task: $e');
-    }
-  }
+	  } catch (e) {
+		print('❌ IMPORT ERROR: $e');
+		_showImportError('Failed to open imported task: $e');
+	  }
+	}
 
 
 
