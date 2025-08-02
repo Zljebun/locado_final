@@ -7,8 +7,11 @@ import 'package:locado_final/screens/debug_screen.dart';
 import 'package:locado_final/screens/task_detail_screen.dart';
 import 'package:locado_final/screens/delete_task_confirmation_screen.dart';
 import 'package:locado_final/screens/calendar_screen.dart';
-import 'package:provider/provider.dart';
-import '../theme/theme_provider.dart';
+// REMOVED: Provider and ThemeProvider imports for startup optimization
+// import 'package:provider/provider.dart';
+// import '../theme/theme_provider.dart';
+
+// COMPATIBILITY: Import Google Maps for type compatibility with main.dart
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'dart:io';
 import 'dart:convert';
@@ -28,6 +31,7 @@ import 'package:app_settings/app_settings.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'dart:io';
 
+// NOTE: Using Google Maps LatLng for compatibility, but only OSM functionality is active
 
 // Helper class for task distance calculations
 class TaskWithDistance {
@@ -72,7 +76,7 @@ class MainNavigationScreen extends StatefulWidget {
 }
 
 class _MainNavigationScreenState extends State<MainNavigationScreen> {
-  String _currentMapProvider = 'Loading...';
+  String _currentMapProvider = 'OpenStreetMap'; // Fixed to OSM only
   int _currentIndex = 0;
 
   // Search functionality
@@ -99,15 +103,19 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
   bool _isLoadingSuggestions = false;
   Timer? _debounceTimer;
   FocusNode _searchFocusNode = FocusNode();
-  static String get googleApiKey => dotenv.env['GOOGLE_MAPS_API_KEY_HTTP'] ?? '';
+  
+  // COMMENTED: Google Maps API key - using OSM only
+  // static String get googleApiKey => dotenv.env['GOOGLE_MAPS_API_KEY_HTTP'] ?? '';
 
   @override
   void initState() {
     super.initState();
-	print('🔑 DEBUG: HTTP API Key = ${dotenv.env['GOOGLE_MAPS_API_KEY_HTTP']}');
+    // REMOVED: Google API key debug print for faster startup
+    // print('🔑 DEBUG: HTTP API Key = ${dotenv.env['GOOGLE_MAPS_API_KEY_HTTP']}');
     _loadTaskData();
     _setupSearchListeners();
-	_loadMapProviderDisplay();
+    // OPTIMIZED: Direct OSM setup instead of loading provider
+    _initializeOSMProvider();
   }
 
   @override
@@ -119,84 +127,91 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
   }
   
   void _testTaskListRefresh() {
-  print('🧪 TEST: Manual task list refresh test');
-  ScaffoldMessenger.of(context).showSnackBar(
-    const SnackBar(
-      content: Text('Refreshing task list...'),
-      duration: Duration(seconds: 1),
-    ),
-  );
-  _loadTaskData();
-}
+    print('🧪 TEST: Manual task list refresh test');
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Refreshing task list...'),
+        duration: Duration(seconds: 1),
+      ),
+    );
+    _loadTaskData();
+  }
+
+  // OPTIMIZED: Direct OSM initialization instead of provider checking
+  void _initializeOSMProvider() {
+    setState(() {
+      _currentMapProvider = 'OpenStreetMap';
+    });
+  }
 
   // Load and cache task data
-	Future<void> _loadTaskData() async {
-	  print('🔄 LOAD TASK DATA: Starting to load task data...');
-	  
-	  final locationPermission = await Permission.locationWhenInUse.status;
-	  if (!locationPermission.isGranted) {
-		print('❌ LOCATION: Permission not granted, requesting...');
-		final result = await Permission.locationWhenInUse.request();
-		if (!result.isGranted) {
-		  print('❌ LOCATION: Permission denied by user');
-		  // Fallback bez location-based sorting
-		  setState(() {
-			_isLoadingTasks = true;
-		  });
-		  
-		  final tasks = await DatabaseHelper.instance.getAllTaskLocations();
-		  _cachedTasks = tasks;
-		  _cachedSortedTasks = tasks.map((task) => TaskWithDistance(task, 0.0)).toList();
-		  
-		  setState(() {
-			_isLoadingTasks = false;
-			_isLoadingDistance = false;
-		  });
-		  return;
-		}
-	  }
-	  
-	  setState(() {
-		_isLoadingTasks = true;
-	  });
+  Future<void> _loadTaskData() async {
+    print('🔄 LOAD TASK DATA: Starting to load task data...');
+    
+    final locationPermission = await Permission.locationWhenInUse.status;
+    if (!locationPermission.isGranted) {
+      print('❌ LOCATION: Permission not granted, requesting...');
+      final result = await Permission.locationWhenInUse.request();
+      if (!result.isGranted) {
+        print('❌ LOCATION: Permission denied by user');
+        // Fallback without location-based sorting
+        setState(() {
+          _isLoadingTasks = true;
+        });
+        
+        final tasks = await DatabaseHelper.instance.getAllTaskLocations();
+        _cachedTasks = tasks;
+        _cachedSortedTasks = tasks.map((task) => TaskWithDistance(task, 0.0)).toList();
+        
+        setState(() {
+          _isLoadingTasks = false;
+          _isLoadingDistance = false;
+        });
+        return;
+      }
+    }
+    
+    setState(() {
+      _isLoadingTasks = true;
+    });
 
-	  try {
-		final tasks = await DatabaseHelper.instance.getAllTaskLocations();
-		print('🔄 LOAD TASK DATA: Loaded ${tasks.length} tasks from database');
-		
-		// Debug - prikaži prva 3 taska
-		for (int i = 0; i < tasks.length && i < 3; i++) {
-		  print('🔄 LOAD TASK DATA: Task $i: ${tasks[i].title} at ${tasks[i].latitude}, ${tasks[i].longitude}');
-		}
-		
-		_cachedTasks = tasks;
+    try {
+      final tasks = await DatabaseHelper.instance.getAllTaskLocations();
+      print('🔄 LOAD TASK DATA: Loaded ${tasks.length} tasks from database');
+      
+      // Debug - show first 3 tasks
+      for (int i = 0; i < tasks.length && i < 3; i++) {
+        print('🔄 LOAD TASK DATA: Task $i: ${tasks[i].title} at ${tasks[i].latitude}, ${tasks[i].longitude}');
+      }
+      
+      _cachedTasks = tasks;
 
-		if (tasks.isNotEmpty) {
-		  setState(() {
-			_isLoadingDistance = true;
-		  });
+      if (tasks.isNotEmpty) {
+        setState(() {
+          _isLoadingDistance = true;
+        });
 
-		  print('🔄 LOAD TASK DATA: Calculating distances...');
-		  final sortedTasks = await _sortTasksByDistanceWithDetails(tasks);
-		  print('🔄 LOAD TASK DATA: Sorted ${sortedTasks.length} tasks by distance');
-		  
-		  _cachedSortedTasks = sortedTasks;
-		} else {
-		  _cachedSortedTasks = [];
-		}
-	  } catch (e) {
-		print('❌ LOAD TASK DATA: Error loading tasks: $e');
-		_cachedTasks = [];
-		_cachedSortedTasks = [];
-	  }
+        print('🔄 LOAD TASK DATA: Calculating distances...');
+        final sortedTasks = await _sortTasksByDistanceWithDetails(tasks);
+        print('🔄 LOAD TASK DATA: Sorted ${sortedTasks.length} tasks by distance');
+        
+        _cachedSortedTasks = sortedTasks;
+      } else {
+        _cachedSortedTasks = [];
+      }
+    } catch (e) {
+      print('❌ LOAD TASK DATA: Error loading tasks: $e');
+      _cachedTasks = [];
+      _cachedSortedTasks = [];
+    }
 
-	  setState(() {
-		_isLoadingTasks = false;
-		_isLoadingDistance = false;
-	  });
-	  
-	  print('🔄 LOAD TASK DATA: Completed, setState() called');
-	}
+    setState(() {
+      _isLoadingTasks = false;
+      _isLoadingDistance = false;
+    });
+    
+    print('🔄 LOAD TASK DATA: Completed, setState() called');
+  }
 
   // Setup search field listeners for autocomplete
   void _setupSearchListeners() {
@@ -204,7 +219,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
     _searchFocusNode.addListener(_onFocusChanged);
   }
 
-// Handle search text changes with debounce
+  // Handle search text changes with debounce
   void _onSearchChanged() {
     final query = _searchController.text.trim();
 
@@ -234,7 +249,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
     });
   }
 
-// Handle focus changes
+  // Handle focus changes
   void _onFocusChanged() {
     if (!_searchFocusNode.hasFocus && _suggestions.isEmpty) {
       setState(() {
@@ -247,67 +262,56 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
     }
   }
 
-// Fetch autocomplete suggestions from Google Places API
-	Future<void> _fetchAutocompleteSuggestions(String query) async {
-	  if (query.isEmpty) return;
+  // OPTIMIZED: Only use Nominatim for autocomplete suggestions
+  Future<void> _fetchAutocompleteSuggestions(String query) async {
+    if (query.isEmpty) return;
 
-	  print('🔍 FETCH: Starting hybrid search for: $query');
+    print('🔍 FETCH: Starting OSM search for: $query');
 
-	  try {
-		// Get current user location for bias
-		LatLng? userLocation;
-		final position = await LocationService.getCurrentLocation();
-		if (position != null) {
-		  userLocation = LatLng(position.latitude, position.longitude);
-		}
+    try {
+      // Get current user location for bias
+      LatLng? userLocation;
+      final position = await LocationService.getCurrentLocation();
+      if (position != null) {
+        userLocation = LatLng(position.latitude, position.longitude);
+      }
 
-		// Check current map provider
-		final prefs = await SharedPreferences.getInstance();
-		final useOSM = prefs.getBool('use_openstreetmap') ?? false;
+      print('🔍 FETCH: Using OSM Nominatim API');
+      await _fetchNominatimSuggestions(query, userLocation);
 
-		print('🔍 FETCH: Using ${useOSM ? 'OSM' : 'Google'} suggestions API');
+    } catch (e) {
+      print('❌ FETCH: Exception: $e');
+      if (mounted) {
+        setState(() {
+          _suggestions.clear();
+          _isLoadingSuggestions = false;
+          _showSuggestions = false;
+        });
+      }
+    }
+  }
 
-		if (useOSM) {
-		  await _fetchNominatimSuggestions(query, userLocation);
-		} else {
-		  await _fetchGooglePlacesSuggestions(query, userLocation);
-		}
+  // Handle suggestion selection
+  Future<void> _onSuggestionSelected(AutocompleteSuggestion suggestion) async {
+    // Hide suggestions and clear focus
+    setState(() {
+      _showSuggestions = false;
+      _suggestions.clear();
+      _isLoadingSuggestions = false;
+    });
 
-	  } catch (e) {
-		print('❌ FETCH: Exception: $e');
-		if (mounted) {
-		  setState(() {
-			_suggestions.clear();
-			_isLoadingSuggestions = false;
-			_showSuggestions = false;
-		  });
-		}
-	  }
-	}
+    _searchFocusNode.unfocus();
 
-// Handle suggestion selection
-	Future<void> _onSuggestionSelected(AutocompleteSuggestion suggestion) async {
-	  // Hide suggestions and clear focus
-	  setState(() {
-		_showSuggestions = false;
-		_suggestions.clear();
-		_isLoadingSuggestions = false;
-	  });
+    // Update search field with selected text
+    _searchController.text = suggestion.mainText;
 
-	  _searchFocusNode.unfocus();
+    // OPTIMIZED: Only handle OSM suggestions since we're OSM-only
+    await _handleOSMSuggestionSelection(suggestion);
+  }
 
-	  // Update search field with selected text
-	  _searchController.text = suggestion.mainText;
-
-	  // Check if this is OSM or Google suggestion and handle accordingly
-	  if (suggestion.placeId.startsWith('osm_')) {
-		await _handleOSMSuggestionSelection(suggestion);
-	  } else {
-		await _getPlaceDetailsAndSearch(suggestion.placeId);
-	  }
-	}
-
-// Get detailed place information and trigger map search
+  // COMMENTED: Google Maps functionality - not used with OSM
+  /*
+  // Get detailed place information and trigger map search
   Future<void> _getPlaceDetailsAndSearch(String placeId) async {
     setState(() {
       _isSearching = true;
@@ -368,6 +372,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
       });
     }
   }
+  */
 
   // Get current page widget based on selected tab
   Widget _getCurrentPage() {
@@ -377,24 +382,24 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
           key: _mapKey,
           selectedLocation: widget.selectedLocation,
         );
-	case 1:
-	  return AILocationSearchScreen(
-		onTasksCreated: () {
-		  print('🔄 AI SEARCH: Tasks created callback triggered');
-		  
-		  setState(() {
-			_currentIndex = 0; // Switch to map tab
-		  });
-		  
-		  // Reload task data when new tasks are created
-		  Future.delayed(const Duration(milliseconds: 100), () {
-			if (mounted) {
-			  print('🔄 AI SEARCH: Reloading task data after AI task creation');
-			  _loadTaskData();
-			}
-		  });
-		},
-	  );
+      case 1:
+        return AILocationSearchScreen(
+          onTasksCreated: () {
+            print('🔄 AI SEARCH: Tasks created callback triggered');
+            
+            setState(() {
+              _currentIndex = 0; // Switch to map tab
+            });
+            
+            // Reload task data when new tasks are created
+            Future.delayed(const Duration(milliseconds: 100), () {
+              if (mounted) {
+                print('🔄 AI SEARCH: Reloading task data after AI task creation');
+                _loadTaskData();
+              }
+            });
+          },
+        );
       case 2:
         return _buildTaskListPage();
       case 3:
@@ -447,160 +452,159 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
     }
   }
 
+  // Sort tasks by distance with details - optimized for Huawei devices
+  Future<List<TaskWithDistance>> _sortTasksByDistanceWithDetails(List<TaskLocation> tasks) async {
+    print('🔄 DISTANCE: Starting distance calculation for ${tasks.length} tasks');
+    
+    try {
+      // Check location permission before accessing location
+      final locationPermission = await Permission.locationWhenInUse.status;
+      if (!locationPermission.isGranted) {
+        print('❌ DISTANCE: Location permission not granted');
+        final result = await Permission.locationWhenInUse.request();
+        if (!result.isGranted) {
+          print('❌ DISTANCE: Location permission denied by user');
+          return tasks.map((task) => TaskWithDistance(task, 0.0)).toList();
+        }
+      }
 
-	// Sort tasks by distance with details - optimized for Huawei devices
-	Future<List<TaskWithDistance>> _sortTasksByDistanceWithDetails(List<TaskLocation> tasks) async {
-	 print('🔄 DISTANCE: Starting distance calculation for ${tasks.length} tasks');
-	 
-	 try {
-	   // Check location permission before accessing location
-	   final locationPermission = await Permission.locationWhenInUse.status;
-	   if (!locationPermission.isGranted) {
-		 print('❌ DISTANCE: Location permission not granted');
-		 final result = await Permission.locationWhenInUse.request();
-		 if (!result.isGranted) {
-		   print('❌ DISTANCE: Location permission denied by user');
-		   return tasks.map((task) => TaskWithDistance(task, 0.0)).toList();
-		 }
-	   }
+      print('🔄 DISTANCE: Getting current location...');
+      
+      // Add timeout and retry logic for Huawei devices
+      Position? position;
+      int retryCount = 0;
+      const maxRetries = 3;
+      
+      while (position == null && retryCount < maxRetries) {
+        try {
+          position = await LocationService.getCurrentLocation()
+              .timeout(const Duration(seconds: 10));
+          
+          if (position != null) {
+            print('🔄 DISTANCE: Got location on attempt ${retryCount + 1}: ${position.latitude}, ${position.longitude}');
+            break;
+          }
+        } on TimeoutException {
+          retryCount++;
+          print('❌ DISTANCE: Timeout on attempt $retryCount/$maxRetries');
+          if (retryCount < maxRetries) {
+            print('🔄 DISTANCE: Retrying in 2 seconds...');
+            await Future.delayed(const Duration(seconds: 2));
+          }
+        } catch (e) {
+          retryCount++;
+          print('❌ DISTANCE: Error on attempt $retryCount/$maxRetries: $e');
+          if (retryCount < maxRetries) {
+            print('🔄 DISTANCE: Retrying in 2 seconds...');
+            await Future.delayed(const Duration(seconds: 2));
+          }
+        }
+      }
 
-	   print('🔄 DISTANCE: Getting current location...');
-	   
-	   // Add timeout and retry logic for Huawei devices
-	   Position? position;
-	   int retryCount = 0;
-	   const maxRetries = 3;
-	   
-	   while (position == null && retryCount < maxRetries) {
-		 try {
-		   position = await LocationService.getCurrentLocation()
-			   .timeout(const Duration(seconds: 10));
-		   
-		   if (position != null) {
-			 print('🔄 DISTANCE: Got location on attempt ${retryCount + 1}: ${position.latitude}, ${position.longitude}');
-			 break;
-		   }
-		 } on TimeoutException {
-		   retryCount++;
-		   print('❌ DISTANCE: Timeout on attempt $retryCount/$maxRetries');
-		   if (retryCount < maxRetries) {
-			 print('🔄 DISTANCE: Retrying in 2 seconds...');
-			 await Future.delayed(const Duration(seconds: 2));
-		   }
-		 } catch (e) {
-		   retryCount++;
-		   print('❌ DISTANCE: Error on attempt $retryCount/$maxRetries: $e');
-		   if (retryCount < maxRetries) {
-			 print('🔄 DISTANCE: Retrying in 2 seconds...');
-			 await Future.delayed(const Duration(seconds: 2));
-		   }
-		 }
-	   }
+      // If no location after all attempts
+      if (position == null) {
+        print('❌ DISTANCE: Failed to get location after $maxRetries attempts');
+        
+        // Fallback: use default Vienna coordinates or last known location
+        try {
+          final prefs = await SharedPreferences.getInstance();
+          final lastLat = prefs.getDouble('last_known_latitude');
+          final lastLng = prefs.getDouble('last_known_longitude');
+          
+          if (lastLat != null && lastLng != null) {
+            print('🔄 DISTANCE: Using last known location: $lastLat, $lastLng');
+            position = Position(
+              latitude: lastLat,
+              longitude: lastLng,
+              timestamp: DateTime.now(),
+              accuracy: 0.0,
+              altitude: 0.0,
+              heading: 0.0,
+              speed: 0.0,
+              speedAccuracy: 0.0,
+              altitudeAccuracy: 0.0,
+              headingAccuracy: 0.0,
+            );
+          } else {
+            print('🔄 DISTANCE: Using default Vienna coordinates');
+            position = Position(
+              latitude: 48.2082,
+              longitude: 16.3738,
+              timestamp: DateTime.now(),
+              accuracy: 0.0,
+              altitude: 0.0,
+              heading: 0.0,
+              speed: 0.0,
+              speedAccuracy: 0.0,
+              altitudeAccuracy: 0.0,
+              headingAccuracy: 0.0,
+            );
+          }
+        } catch (e) {
+          print('❌ DISTANCE: Error accessing SharedPreferences: $e');
+          // Return tasks without distance sorting
+          return tasks.map((task) => TaskWithDistance(task, 0.0)).toList();
+        }
+      } else {
+        // Save current location for future fallback
+        try {
+          final prefs = await SharedPreferences.getInstance();
+          await prefs.setDouble('last_known_latitude', position.latitude);
+          await prefs.setDouble('last_known_longitude', position.longitude);
+          print('🔄 DISTANCE: Saved current location as last known');
+        } catch (e) {
+          print('❌ DISTANCE: Failed to save last known location: $e');
+        }
+      }
 
-	   // If no location after all attempts
-	   if (position == null) {
-		 print('❌ DISTANCE: Failed to get location after $maxRetries attempts');
-		 
-		 // Fallback: use default Vienna coordinates or last known location
-		 try {
-		   final prefs = await SharedPreferences.getInstance();
-		   final lastLat = prefs.getDouble('last_known_latitude');
-		   final lastLng = prefs.getDouble('last_known_longitude');
-		   
-		   if (lastLat != null && lastLng != null) {
-			 print('🔄 DISTANCE: Using last known location: $lastLat, $lastLng');
-			 position = Position(
-			   latitude: lastLat,
-			   longitude: lastLng,
-			   timestamp: DateTime.now(),
-			   accuracy: 0.0,
-			   altitude: 0.0,
-			   heading: 0.0,
-			   speed: 0.0,
-			   speedAccuracy: 0.0,
-			   altitudeAccuracy: 0.0,
-			   headingAccuracy: 0.0,
-			 );
-		   } else {
-			 print('🔄 DISTANCE: Using default Vienna coordinates');
-			 position = Position(
-			   latitude: 48.2082,
-			   longitude: 16.3738,
-			   timestamp: DateTime.now(),
-			   accuracy: 0.0,
-			   altitude: 0.0,
-			   heading: 0.0,
-			   speed: 0.0,
-			   speedAccuracy: 0.0,
-			   altitudeAccuracy: 0.0,
-			   headingAccuracy: 0.0,
-			 );
-		   }
-		 } catch (e) {
-		   print('❌ DISTANCE: Error accessing SharedPreferences: $e');
-		   // Return tasks without distance sorting
-		   return tasks.map((task) => TaskWithDistance(task, 0.0)).toList();
-		 }
-	   } else {
-		 // Save current location for future fallback
-		 try {
-		   final prefs = await SharedPreferences.getInstance();
-		   await prefs.setDouble('last_known_latitude', position.latitude);
-		   await prefs.setDouble('last_known_longitude', position.longitude);
-		   print('🔄 DISTANCE: Saved current location as last known');
-		 } catch (e) {
-		   print('❌ DISTANCE: Failed to save last known location: $e');
-		 }
-	   }
+      print('🔄 DISTANCE: Calculating distances from ${position.latitude}, ${position.longitude}');
+      
+      List<TaskWithDistance> tasksWithDistance = [];
 
-	   print('🔄 DISTANCE: Calculating distances from ${position.latitude}, ${position.longitude}');
-	   
-	   List<TaskWithDistance> tasksWithDistance = [];
+      for (int i = 0; i < tasks.length; i++) {
+        final task = tasks[i];
+        try {
+          final distance = _calculateDistance(
+            position.latitude,
+            position.longitude,
+            task.latitude,
+            task.longitude,
+          );
+          
+          tasksWithDistance.add(TaskWithDistance(task, distance));
+          
+          // Debug first few tasks
+          if (i < 3) {
+            print('🔄 DISTANCE: Task "${task.title}": ${_formatDistance(distance)}');
+          }
+          
+        } catch (e) {
+          print('❌ DISTANCE: Error calculating distance for task "${task.title}": $e');
+          tasksWithDistance.add(TaskWithDistance(task, 999999.0)); // Put at end
+        }
+      }
 
-	   for (int i = 0; i < tasks.length; i++) {
-		 final task = tasks[i];
-		 try {
-		   final distance = _calculateDistance(
-			 position.latitude,
-			 position.longitude,
-			 task.latitude,
-			 task.longitude,
-		   );
-		   
-		   tasksWithDistance.add(TaskWithDistance(task, distance));
-		   
-		   // Debug first few tasks
-		   if (i < 3) {
-			 print('🔄 DISTANCE: Task "${task.title}": ${_formatDistance(distance)}');
-		   }
-		   
-		 } catch (e) {
-		   print('❌ DISTANCE: Error calculating distance for task "${task.title}": $e');
-		   tasksWithDistance.add(TaskWithDistance(task, 999999.0)); // Put at end
-		 }
-	   }
+      // Sort by distance
+      tasksWithDistance.sort((a, b) => a.distance.compareTo(b.distance));
+      
+      print('🔄 DISTANCE: Successfully sorted ${tasksWithDistance.length} tasks by distance');
+      
+      // Debug first few sorted tasks
+      for (int i = 0; i < tasksWithDistance.length && i < 3; i++) {
+        final twd = tasksWithDistance[i];
+        print('🔄 DISTANCE: Sorted #${i + 1}: "${twd.task.title}" - ${_formatDistance(twd.distance)}');
+      }
+      
+      return tasksWithDistance;
 
-	   // Sort by distance
-	   tasksWithDistance.sort((a, b) => a.distance.compareTo(b.distance));
-	   
-	   print('🔄 DISTANCE: Successfully sorted ${tasksWithDistance.length} tasks by distance');
-	   
-	   // Debug first few sorted tasks
-	   for (int i = 0; i < tasksWithDistance.length && i < 3; i++) {
-		 final twd = tasksWithDistance[i];
-		 print('🔄 DISTANCE: Sorted #${i + 1}: "${twd.task.title}" - ${_formatDistance(twd.distance)}');
-	   }
-	   
-	   return tasksWithDistance;
-
-	 } catch (e) {
-	   print('❌ DISTANCE: Unexpected error in _sortTasksByDistanceWithDetails: $e');
-	   print('❌ DISTANCE: Stack trace: ${StackTrace.current}');
-	   
-	   // Fallback: return tasks without sorting
-	   return tasks.map((task) => TaskWithDistance(task, 0.0)).toList();
-	 }
-	}
+    } catch (e) {
+      print('❌ DISTANCE: Unexpected error in _sortTasksByDistanceWithDetails: $e');
+      print('❌ DISTANCE: Stack trace: ${StackTrace.current}');
+      
+      // Fallback: return tasks without sorting
+      return tasks.map((task) => TaskWithDistance(task, 0.0)).toList();
+    }
+  }
 
   // Toggle selection mode - optimized to avoid unnecessary rebuilds
   void _toggleSelectionMode() {
@@ -612,7 +616,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
     });
   }
 
-// Toggle task selection - optimized for smooth UX
+  // Toggle task selection - optimized for smooth UX
   void _toggleTaskSelection(int taskId) {
     // Update selection state without triggering full rebuild
     if (_selectedTaskIds.contains(taskId)) {
@@ -628,7 +632,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
     });
   }
 
-// Select all tasks - optimized
+  // Select all tasks - optimized
   void _selectAllTasks(List<TaskWithDistance> tasks) {
     setState(() {
       if (_selectedTaskIds.length == tasks.length) {
@@ -717,59 +721,58 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
     }
   }
 
-	Widget _buildTaskListPage() {
-
-	  return Scaffold(
-		appBar: AppBar(
-		  title: Text(_isSelectionMode
-			  ? '${_selectedTaskIds.length} Selected'
-			  : 'All Tasks'
-		  ),
-		  backgroundColor: Colors.teal,
-		  foregroundColor: Colors.white,
-		  automaticallyImplyLeading: false,
-		  actions: [
-			if (_isSelectionMode) ...[
-			  if (_isDeleting)
-				const Padding(
-				  padding: EdgeInsets.all(16.0),
-				  child: SizedBox(
-					width: 20,
-					height: 20,
-					child: CircularProgressIndicator(
-					  strokeWidth: 2,
-					  color: Colors.white,
-					),
-				  ),
-				)
-			  else
-				IconButton(
-				  icon: const Icon(Icons.delete),
-				  onPressed: _selectedTaskIds.isEmpty ? null : _deleteSelectedTasks,
-				),
-			  IconButton(
-				icon: const Icon(Icons.close),
-				onPressed: _toggleSelectionMode,
-			  ),
-			] else ...[
-			  IconButton(
-				icon: const Icon(Icons.refresh),
-				onPressed: () {
-				  print('🔄 TASKS LIST: Manual refresh button pressed');
-				  _loadTaskData();
-				},
-				tooltip: 'Refresh Tasks',
-			  ),
-			  IconButton(
-				icon: const Icon(Icons.checklist),
-				onPressed: _toggleSelectionMode,
-			  ),
-			],
-		  ],
-		),
-		body: _buildTaskListBody(),
-	  );
-	}
+  Widget _buildTaskListPage() {
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(_isSelectionMode
+            ? '${_selectedTaskIds.length} Selected'
+            : 'All Tasks'
+        ),
+        backgroundColor: Colors.teal,
+        foregroundColor: Colors.white,
+        automaticallyImplyLeading: false,
+        actions: [
+          if (_isSelectionMode) ...[
+            if (_isDeleting)
+              const Padding(
+                padding: EdgeInsets.all(16.0),
+                child: SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: Colors.white,
+                  ),
+                ),
+              )
+            else
+              IconButton(
+                icon: const Icon(Icons.delete),
+                onPressed: _selectedTaskIds.isEmpty ? null : _deleteSelectedTasks,
+              ),
+            IconButton(
+              icon: const Icon(Icons.close),
+              onPressed: _toggleSelectionMode,
+            ),
+          ] else ...[
+            IconButton(
+              icon: const Icon(Icons.refresh),
+              onPressed: () {
+                print('🔄 TASKS LIST: Manual refresh button pressed');
+                _loadTaskData();
+              },
+              tooltip: 'Refresh Tasks',
+            ),
+            IconButton(
+              icon: const Icon(Icons.checklist),
+              onPressed: _toggleSelectionMode,
+            ),
+          ],
+        ],
+      ),
+      body: _buildTaskListBody(),
+    );
+  }
 
   Widget _buildTaskListBody() {
     // Show loading indicator
@@ -1059,7 +1062,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
     );
   }
 
-  // Build more page with settings and options
+  // OPTIMIZED: Build more page without theme toggle
   Widget _buildMorePage() {
     return Scaffold(
       appBar: AppBar(
@@ -1071,39 +1074,8 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          // Theme toggle
-          Consumer<ThemeProvider>(
-            builder: (context, themeProvider, child) {
-              return _buildMoreOption(
-                icon: themeProvider.themeIcon,
-                title: 'Theme',
-                subtitle: themeProvider.currentThemeDescription,
-                onTap: () async {
-                  await themeProvider.toggleTheme();
-
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Row(
-                        children: [
-                          Icon(
-                            themeProvider.isDarkMode ? Icons.dark_mode : Icons.light_mode,
-                            color: Colors.white,
-                            size: 20,
-                          ),
-                          const SizedBox(width: 8),
-                          Text('${themeProvider.currentThemeDescription} activated!'),
-                        ],
-                      ),
-                      backgroundColor: Colors.green,
-                      duration: const Duration(seconds: 2),
-                    ),
-                  );
-                },
-              );
-            },
-          ),
-
-          const SizedBox(height: 8),
+          // REMOVED: Theme toggle for startup optimization
+          // Theme toggle was here but removed for faster startup
 
           // Settings
           _buildMoreOption(
@@ -1140,25 +1112,26 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
               );
             },
           ),
-		  
-		  _buildMoreOption(
-			  icon: Icons.refresh,
-			  title: 'Test Task Refresh',
-			  subtitle: 'Debug: manually refresh task list',
-			  iconColor: Colors.purple,
-			  onTap: _testTaskListRefresh,
-			),
-			
-		_buildMoreOption(
-		  icon: Icons.notifications_off,
-		  title: 'Fix Pop-up Notifications',
-		  subtitle: 'Turn off annoying notification pop-ups (Huawei)',
-		  iconColor: Colors.orange,
-		  onTap: _showHuaweiNotificationHelp,
-		),
-		  
-		  //const SizedBox(height: 8),
-
+          
+          const SizedBox(height: 8),
+          
+          _buildMoreOption(
+            icon: Icons.refresh,
+            title: 'Test Task Refresh',
+            subtitle: 'Debug: manually refresh task list',
+            iconColor: Colors.purple,
+            onTap: _testTaskListRefresh,
+          ),
+          
+          const SizedBox(height: 8),
+          
+          _buildMoreOption(
+            icon: Icons.notifications_off,
+            title: 'Fix Pop-up Notifications',
+            subtitle: 'Turn off annoying notification pop-ups (Huawei)',
+            iconColor: Colors.orange,
+            onTap: _showHuaweiNotificationHelp,
+          ),
         ],
       ),
     );
@@ -1241,24 +1214,24 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
   }
 
   // Helper methods for task operations
-	void _openTaskDetail(TaskLocation task) async {
-	  print('🔄 OPEN TASK DETAIL: Opening task: ${task.title}');
-	  
-	  final result = await Navigator.push(
-		context,
-		MaterialPageRoute(
-		  builder: (ctx) => TaskDetailScreen(taskLocation: task),
-		),
-	  );
+  void _openTaskDetail(TaskLocation task) async {
+    print('🔄 OPEN TASK DETAIL: Opening task: ${task.title}');
+    
+    final result = await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (ctx) => TaskDetailScreen(taskLocation: task),
+      ),
+    );
 
-	  print('🔄 OPEN TASK DETAIL: Returned with result: $result');
+    print('🔄 OPEN TASK DETAIL: Returned with result: $result');
 
-	  if (result != null) {
-		print('🔄 OPEN TASK DETAIL: Result is not null, reloading task data...');
-		// Reload task data instead of just calling setState
-		await _loadTaskData();
-	  }
-	}
+    if (result != null) {
+      print('🔄 OPEN TASK DETAIL: Result is not null, reloading task data...');
+      // Reload task data instead of just calling setState
+      await _loadTaskData();
+    }
+  }
 
   void _deleteTask(TaskLocation task) {
     HapticFeedback.mediumImpact();
@@ -1286,18 +1259,18 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
                 ),
               );
 
-				if (result == true) {
-				  print('🔄 DELETE TASK: Task deleted, reloading data...');
-				  // Reload task data instead of just calling setState
-				  await _loadTaskData();
+              if (result == true) {
+                print('🔄 DELETE TASK: Task deleted, reloading data...');
+                // Reload task data instead of just calling setState
+                await _loadTaskData();
 
-				  ScaffoldMessenger.of(context).showSnackBar(
-					SnackBar(
-					  content: Text('Task "${task.title}" deleted'),
-					  backgroundColor: Colors.red,
-					),
-				  );
-				}
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text('Task "${task.title}" deleted'),
+                    backgroundColor: Colors.red,
+                  ),
+                );
+              }
             },
             style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
             child: const Text('Delete', style: TextStyle(color: Colors.white)),
@@ -1422,74 +1395,74 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
       ),
 
       // Bottom Navigation Bar
-		bottomNavigationBar: BottomNavigationBar(
-		  currentIndex: _currentIndex,
-		  onTap: (index) {
-			// ✅ ZAPAMTI staru vrednost PRE setState
-			final int previousIndex = _currentIndex;
-			
-			setState(() {
-			  _currentIndex = index;
-			});
+      bottomNavigationBar: BottomNavigationBar(
+        currentIndex: _currentIndex,
+        onTap: (index) {
+          // Remember old value before setState
+          final int previousIndex = _currentIndex;
+          
+          setState(() {
+            _currentIndex = index;
+          });
 
-			// ✅ ISPRAVKA - koristi previousIndex umesto _currentIndex
-			if (index == 2 && previousIndex != 2) {
-			  print('🔄 MAIN NAV: Switching to Tasks tab, refreshing data...');
-			  _loadTaskData();
-			}
-		  },
-		  type: BottomNavigationBarType.fixed,
-		  selectedItemColor: Colors.teal,
-		  unselectedItemColor: Colors.grey,
-		  items: const [
-			BottomNavigationBarItem(
-			  icon: Icon(Icons.map),
-			  label: 'Map',
-			),
-			BottomNavigationBarItem(
-			  icon: Icon(Icons.smart_toy),
-			  label: 'AI Search',
-			),
-			BottomNavigationBarItem(
-			  icon: Icon(Icons.format_list_bulleted),
-			  label: 'Tasks',
-			),
-			BottomNavigationBarItem(
-			  icon: Icon(Icons.calendar_today),
-			  label: 'Calendar',
-			),
-			BottomNavigationBarItem(
-			  icon: Icon(Icons.more_horiz),
-			  label: 'More',
-			),
-		  ],
-		),
+          // Use previousIndex instead of _currentIndex
+          if (index == 2 && previousIndex != 2) {
+            print('🔄 MAIN NAV: Switching to Tasks tab, refreshing data...');
+            _loadTaskData();
+          }
+        },
+        type: BottomNavigationBarType.fixed,
+        selectedItemColor: Colors.teal,
+        unselectedItemColor: Colors.grey,
+        items: const [
+          BottomNavigationBarItem(
+            icon: Icon(Icons.map),
+            label: 'Map',
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.smart_toy),
+            label: 'AI Search',
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.format_list_bulleted),
+            label: 'Tasks',
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.calendar_today),
+            label: 'Calendar',
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.more_horiz),
+            label: 'More',
+          ),
+        ],
+      ),
 
       // Floating Action Button (only show on map tab)
-		floatingActionButton: _currentIndex == 0 ? FloatingActionButton(
-		  onPressed: () async {
-			print('🔄 FAB: FloatingActionButton pressed, opening TaskInputScreen...');
-			
-			final userPosition = LatLng(48.2082, 16.3738); // Default Vienna coordinates
-			final result = await Navigator.push(
-			  context,
-			  MaterialPageRoute(
-				builder: (ctx) => TaskInputScreen(location: userPosition),
-			  ),
-			);
+      floatingActionButton: _currentIndex == 0 ? FloatingActionButton(
+        onPressed: () async {
+          print('🔄 FAB: FloatingActionButton pressed, opening TaskInputScreen...');
+          
+          final userPosition = LatLng(48.2082, 16.3738); // Default Vienna coordinates
+          final result = await Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (ctx) => TaskInputScreen(location: userPosition),
+            ),
+          );
 
-			print('🔄 FAB: TaskInputScreen returned with result: $result');
+          print('🔄 FAB: TaskInputScreen returned with result: $result');
 
-			if (result == true) {
-			  print('🔄 FAB: Result is true, reloading task data...');
-			  // Reload task data after new task is added
-			  await _loadTaskData();
-			}
-		  },
-		  backgroundColor: Colors.teal,
-		  foregroundColor: Colors.white,
-		  child: const Icon(Icons.add),
-		) : null,
+          if (result == true) {
+            print('🔄 FAB: Result is true, reloading task data...');
+            // Reload task data after new task is added
+            await _loadTaskData();
+          }
+        },
+        backgroundColor: Colors.teal,
+        foregroundColor: Colors.white,
+        child: const Icon(Icons.add),
+      ) : null,
 
       floatingActionButtonLocation: FloatingActionButtonLocation.startFloat,
     );
@@ -1693,476 +1666,479 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
       });
     }
   }
- 
-Future<void> _loadMapProviderDisplay() async {
-  try {
-    final prefs = await SharedPreferences.getInstance();
-    
-    // ✅ FORSIRAJ OSM
-    await prefs.setBool('use_openstreetmap', true);
-    
-    setState(() {
-      _currentMapProvider = 'OpenStreetMap';
-    });
-  } catch (e) {
-    setState(() {
-      _currentMapProvider = 'OpenStreetMap';
-    });
+
+  // COMMENTED: Google Maps functionality - removed for OSM-only optimization
+  /*
+  Future<void> _loadMapProviderDisplay() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      
+      // Force OSM
+      await prefs.setBool('use_openstreetmap', true);
+      
+      setState(() {
+        _currentMapProvider = 'OpenStreetMap';
+      });
+    } catch (e) {
+      setState(() {
+        _currentMapProvider = 'OpenStreetMap';
+      });
+    }
   }
-}
 
-void _showMapProviderDialog() {
-  showDialog(
-    context: context,
-    builder: (context) => AlertDialog(
-      title: const Row(
-        children: [
-          Icon(Icons.layers, color: Colors.blue),
-          SizedBox(width: 8),
-          Text('Choose Map Provider'),
-        ],
-      ),
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text('Select which map service to use in the app:'),
-          const SizedBox(height: 16),
-          
-          // Google Maps option
-          ListTile(
-            leading: const Icon(Icons.map, color: Colors.red),
-            title: const Text('Google Maps'),
-            subtitle: const Text('Satellite imagery, detailed POI data'),
-            trailing: _currentMapProvider == 'Google Maps' 
-                ? const Icon(Icons.check, color: Colors.green) 
-                : null,
-            onTap: () => _selectMapProvider('Google Maps'),
-          ),
-          
-          // OpenStreetMap option
-          ListTile(
-            leading: const Icon(Icons.layers, color: Colors.green),
-            title: const Text('OpenStreetMap'),
-            subtitle: const Text('Open source, no API costs'),
-            trailing: _currentMapProvider == 'OpenStreetMap' 
-                ? const Icon(Icons.check, color: Colors.green) 
-                : null,
-            onTap: () => _selectMapProvider('OpenStreetMap'),
-          ),
-        ],
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(context),
-          child: const Text('Cancel'),
-        ),
-      ],
-    ),
-  );
-}
-
-Future<void> _selectMapProvider(String provider) async {
-  try {
-    final prefs = await SharedPreferences.getInstance();
-    final useOSM = provider == 'OpenStreetMap';
-    
-    await prefs.setBool('use_openstreetmap', useOSM);
-    
-    setState(() {
-      _currentMapProvider = provider;
-    });
-    
-    Navigator.pop(context);
-    
-    // Show confirmation and restart hint
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Row(
+  void _showMapProviderDialog() {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Row(
           children: [
-            Icon(
-              useOSM ? Icons.layers : Icons.map,
-              color: Colors.white,
+            Icon(Icons.layers, color: Colors.blue),
+            SizedBox(width: 8),
+            Text('Choose Map Provider'),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('Select which map service to use in the app:'),
+            const SizedBox(height: 16),
+            
+            // Google Maps option
+            ListTile(
+              leading: const Icon(Icons.map, color: Colors.red),
+              title: const Text('Google Maps'),
+              subtitle: const Text('Satellite imagery, detailed POI data'),
+              trailing: _currentMapProvider == 'Google Maps' 
+                  ? const Icon(Icons.check, color: Colors.green) 
+                  : null,
+              onTap: () => _selectMapProvider('Google Maps'),
             ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text('$provider selected! Go to Map tab to see changes.'),
+            
+            // OpenStreetMap option
+            ListTile(
+              leading: const Icon(Icons.layers, color: Colors.green),
+              title: const Text('OpenStreetMap'),
+              subtitle: const Text('Open source, no API costs'),
+              trailing: _currentMapProvider == 'OpenStreetMap' 
+                  ? const Icon(Icons.check, color: Colors.green) 
+                  : null,
+              onTap: () => _selectMapProvider('OpenStreetMap'),
             ),
           ],
         ),
-        backgroundColor: Colors.green,
-        duration: const Duration(seconds: 4),
-        action: SnackBarAction(
-          label: 'Go to Map',
-          textColor: Colors.white,
-          onPressed: () {
-            setState(() {
-              _currentIndex = 0; // Switch to map tab
-            });
-          },
-        ),
-      ),
-    );
-    
-  } catch (e) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('Error saving setting: $e'),
-        backgroundColor: Colors.red,
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+        ],
       ),
     );
   }
-}
 
-  // Google Places Autocomplete (existing functionality)
-	Future<void> _fetchGooglePlacesSuggestions(String query, LatLng? userLocation) async {
-	  // Build API URL with location bias
-	  String url = 'https://maps.googleapis.com/maps/api/place/autocomplete/json'
-		  '?input=${Uri.encodeComponent(query)}'
-		  '&key=${dotenv.env['GOOGLE_MAPS_API_KEY_HTTP'] ?? ''}'
-		  '&language=en';
+  Future<void> _selectMapProvider(String provider) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final useOSM = provider == 'OpenStreetMap';
+      
+      await prefs.setBool('use_openstreetmap', useOSM);
+      
+      setState(() {
+        _currentMapProvider = provider;
+      });
+      
+      Navigator.pop(context);
+      
+      // Show confirmation and restart hint
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Row(
+            children: [
+              Icon(
+                useOSM ? Icons.layers : Icons.map,
+                color: Colors.white,
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text('$provider selected! Go to Map tab to see changes.'),
+              ),
+            ],
+          ),
+          backgroundColor: Colors.green,
+          duration: const Duration(seconds: 4),
+          action: SnackBarAction(
+            label: 'Go to Map',
+            textColor: Colors.white,
+            onPressed: () {
+              setState(() {
+                _currentIndex = 0; // Switch to map tab
+              });
+            },
+          ),
+        ),
+      );
+      
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Error saving setting: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
+  }
 
-	  // Add location bias if available
-	  if (userLocation != null) {
-		url += '&location=${userLocation.latitude},${userLocation.longitude}'
-			'&radius=5000'; // 5km radius
-	  }
+  // Google Places Autocomplete (removed functionality)
+  Future<void> _fetchGooglePlacesSuggestions(String query, LatLng? userLocation) async {
+    // Build API URL with location bias
+    String url = 'https://maps.googleapis.com/maps/api/place/autocomplete/json'
+        '?input=${Uri.encodeComponent(query)}'
+        '&key=${dotenv.env['GOOGLE_MAPS_API_KEY_HTTP'] ?? ''}'
+        '&language=en';
 
-	  print('🔍 FETCH: Google API URL: $url');
+    // Add location bias if available
+    if (userLocation != null) {
+      url += '&location=${userLocation.latitude},${userLocation.longitude}'
+          '&radius=5000'; // 5km radius
+    }
 
-	  final response = await http.get(Uri.parse(url));
+    print('🔍 FETCH: Google API URL: $url');
 
-	  print('🔍 FETCH: Google response status: ${response.statusCode}');
-	  print('🔍 FETCH: Google response body: ${response.body}');
+    final response = await http.get(Uri.parse(url));
 
-	  if (response.statusCode == 200) {
-		final data = json.decode(response.body);
-		final List<dynamic> predictions = data['predictions'] ?? [];
+    print('🔍 FETCH: Google response status: ${response.statusCode}');
+    print('🔍 FETCH: Google response body: ${response.body}');
 
-		print('🔍 FETCH: Found ${predictions.length} Google predictions');
+    if (response.statusCode == 200) {
+      final data = json.decode(response.body);
+      final List<dynamic> predictions = data['predictions'] ?? [];
 
-		final suggestions = predictions
-			.map((prediction) => AutocompleteSuggestion.fromJson(prediction))
-			.toList();
+      print('🔍 FETCH: Found ${predictions.length} Google predictions');
 
-		if (mounted) {
-		  setState(() {
-			_suggestions = suggestions;
-			_isLoadingSuggestions = false;
-			_showSuggestions = suggestions.isNotEmpty;
-		  });
-		  print('🔍 FETCH: Updated UI with ${suggestions.length} Google suggestions');
-		}
-	  } else {
-		print('❌ FETCH: Google error response: ${response.statusCode}');
-		if (mounted) {
-		  setState(() {
-			_suggestions.clear();
-			_isLoadingSuggestions = false;
-			_showSuggestions = false;
-		  });
-		}
-	  }
-	}
+      final suggestions = predictions
+          .map((prediction) => AutocompleteSuggestion.fromJson(prediction))
+          .toList();
 
-	// NEW: Nominatim-based autocomplete suggestions for OpenStreetMap
-	Future<void> _fetchNominatimSuggestions(String query, LatLng? userLocation) async {
-	  // Default to Vienna if no user location
-	  final double centerLat = userLocation?.latitude ?? 48.2082;
-	  final double centerLng = userLocation?.longitude ?? 16.3738;
+      if (mounted) {
+        setState(() {
+          _suggestions = suggestions;
+          _isLoadingSuggestions = false;
+          _showSuggestions = suggestions.isNotEmpty;
+        });
+        print('🔍 FETCH: Updated UI with ${suggestions.length} Google suggestions');
+      }
+    } else {
+      print('❌ FETCH: Google error response: ${response.statusCode}');
+      if (mounted) {
+        setState(() {
+          _suggestions.clear();
+          _isLoadingSuggestions = false;
+          _showSuggestions = false;
+        });
+      }
+    }
+  }
+  */
 
-	  // Create viewbox around current location (approximately 10km radius)
-	  final double radiusOffset = 0.1; // ~10km in degrees
-	  final double minLon = centerLng - radiusOffset;
-	  final double maxLat = centerLat + radiusOffset;
-	  final double maxLon = centerLng + radiusOffset;
-	  final double minLat = centerLat - radiusOffset;
+  // Nominatim-based autocomplete suggestions for OpenStreetMap
+  Future<void> _fetchNominatimSuggestions(String query, LatLng? userLocation) async {
+    // Default to Vienna if no user location
+    final double centerLat = userLocation?.latitude ?? 48.2082;
+    final double centerLng = userLocation?.longitude ?? 16.3738;
 
-	  final url = 'https://nominatim.openstreetmap.org/search'
-		  '?q=${Uri.encodeComponent(query)}'
-		  '&format=json'
-		  '&limit=8' // Fewer results for autocomplete
-		  '&addressdetails=1'
-		  '&namedetails=1'
-		  '&viewbox=$minLon,$maxLat,$maxLon,$minLat'
-		  '&bounded=1'; // Restrict to viewbox for relevant results
+    // Create viewbox around current location (approximately 10km radius)
+    final double radiusOffset = 0.1; // ~10km in degrees
+    final double minLon = centerLng - radiusOffset;
+    final double maxLat = centerLat + radiusOffset;
+    final double maxLon = centerLng + radiusOffset;
+    final double minLat = centerLat - radiusOffset;
 
-	  print('🔍 FETCH: Nominatim API URL: $url');
+    final url = 'https://nominatim.openstreetmap.org/search'
+        '?q=${Uri.encodeComponent(query)}'
+        '&format=json'
+        '&limit=8' // Fewer results for autocomplete
+        '&addressdetails=1'
+        '&namedetails=1'
+        '&viewbox=$minLon,$maxLat,$maxLon,$minLat'
+        '&bounded=1'; // Restrict to viewbox for relevant results
 
-	  final response = await http.get(
-		Uri.parse(url),
-		headers: {
-		  'User-Agent': 'Locado/1.0 (Flutter App)', // Required by Nominatim
-		},
-	  );
+    print('🔍 FETCH: Nominatim API URL: $url');
 
-	  print('🔍 FETCH: Nominatim response status: ${response.statusCode}');
+    final response = await http.get(
+      Uri.parse(url),
+      headers: {
+        'User-Agent': 'Locado/1.0 (Flutter App)', // Required by Nominatim
+      },
+    );
 
-	  if (response.statusCode == 200) {
-		final List<dynamic> results = json.decode(response.body);
-		print('🔍 FETCH: Found ${results.length} Nominatim results');
+    print('🔍 FETCH: Nominatim response status: ${response.statusCode}');
 
-		// Convert Nominatim results to AutocompleteSuggestion format
-		final List<AutocompleteSuggestion> suggestions = [];
+    if (response.statusCode == 200) {
+      final List<dynamic> results = json.decode(response.body);
+      print('🔍 FETCH: Found ${results.length} Nominatim results');
 
-		for (final result in results) {
-		  final displayName = result['display_name'] ?? '';
-		  final parts = displayName.split(',');
-		  
-		  // Extract main text (place name)
-		  String mainText = _extractBestNameFromNominatim(result);
-		  
-		  // Extract secondary text (address/location info)
-		  String? secondaryText;
-		  if (parts.length > 1) {
-			// Take next 2-3 parts for context
-			final contextParts = parts.skip(1).take(3).map((s) => s.trim()).toList();
-			secondaryText = contextParts.join(', ');
-		  }
+      // Convert Nominatim results to AutocompleteSuggestion format
+      final List<AutocompleteSuggestion> suggestions = [];
 
-		  suggestions.add(
-			AutocompleteSuggestion(
-			  placeId: 'osm_${result['osm_type']}_${result['osm_id']}', // Create unique ID
-			  description: displayName,
-			  mainText: mainText,
-			  secondaryText: secondaryText,
-			),
-		  );
-		}
+      for (final result in results) {
+        final displayName = result['display_name'] ?? '';
+        final parts = displayName.split(',');
+        
+        // Extract main text (place name)
+        String mainText = _extractBestNameFromNominatim(result);
+        
+        // Extract secondary text (address/location info)
+        String? secondaryText;
+        if (parts.length > 1) {
+          // Take next 2-3 parts for context
+          final contextParts = parts.skip(1).take(3).map((s) => s.trim()).toList();
+          secondaryText = contextParts.join(', ');
+        }
 
-		print('🔍 FETCH: Converted to ${suggestions.length} OSM suggestions');
+        suggestions.add(
+          AutocompleteSuggestion(
+            placeId: 'osm_${result['osm_type']}_${result['osm_id']}', // Create unique ID
+            description: displayName,
+            mainText: mainText,
+            secondaryText: secondaryText,
+          ),
+        );
+      }
 
-		if (mounted) {
-		  setState(() {
-			_suggestions = suggestions;
-			_isLoadingSuggestions = false;
-			_showSuggestions = suggestions.isNotEmpty;
-		  });
-		  print('🔍 FETCH: Updated UI with ${suggestions.length} Nominatim suggestions');
-		}
-	  } else {
-		print('❌ FETCH: Nominatim error response: ${response.statusCode}');
-		if (mounted) {
-		  setState(() {
-			_suggestions.clear();
-			_isLoadingSuggestions = false;
-			_showSuggestions = false;
-		  });
-		}
-	  }
-	}
+      print('🔍 FETCH: Converted to ${suggestions.length} OSM suggestions');
 
-	// Helper method to extract best name from Nominatim result
-	String _extractBestNameFromNominatim(Map<String, dynamic> result) {
-	  // Try different name fields in order of preference
-	  if (result['namedetails'] != null) {
-		final nameDetails = result['namedetails'];
-		if (nameDetails['name:en'] != null && nameDetails['name:en'].toString().isNotEmpty) {
-		  return nameDetails['name:en'];
-		}
-		if (nameDetails['name'] != null && nameDetails['name'].toString().isNotEmpty) {
-		  return nameDetails['name'];
-		}
-	  }
-	  
-	  if (result['name'] != null && result['name'].toString().isNotEmpty) {
-		return result['name'];
-	  }
-	  
-	  // Fallback to first part of display_name
-	  final displayName = result['display_name'] ?? '';
-	  final parts = displayName.split(',');
-	  return parts.isNotEmpty ? parts.first.trim() : 'Unknown Location';
-	}
-	
-	// NEW: Handle OSM suggestion selection
-	Future<void> _handleOSMSuggestionSelection(AutocompleteSuggestion suggestion) async {
-	  setState(() {
-		_isSearching = true;
-	  });
+      if (mounted) {
+        setState(() {
+          _suggestions = suggestions;
+          _isLoadingSuggestions = false;
+          _showSuggestions = suggestions.isNotEmpty;
+        });
+        print('🔍 FETCH: Updated UI with ${suggestions.length} Nominatim suggestions');
+      }
+    } else {
+      print('❌ FETCH: Nominatim error response: ${response.statusCode}');
+      if (mounted) {
+        setState(() {
+          _suggestions.clear();
+          _isLoadingSuggestions = false;
+          _showSuggestions = false;
+        });
+      }
+    }
+  }
 
-	  try {
-		// For OSM suggestions, we can directly trigger the search
-		// since we already have the location info in the description
-		
-		// Trigger map search with the suggestion text
-		final mapState = _mapKey.currentState as dynamic;
-		if (mapState != null) {
-		  await mapState.performSearch(suggestion.mainText);
-		}
+  // Helper method to extract best name from Nominatim result
+  String _extractBestNameFromNominatim(Map<String, dynamic> result) {
+    // Try different name fields in order of preference
+    if (result['namedetails'] != null) {
+      final nameDetails = result['namedetails'];
+      if (nameDetails['name:en'] != null && nameDetails['name:en'].toString().isNotEmpty) {
+        return nameDetails['name:en'];
+      }
+      if (nameDetails['name'] != null && nameDetails['name'].toString().isNotEmpty) {
+        return nameDetails['name'];
+      }
+    }
+    
+    if (result['name'] != null && result['name'].toString().isNotEmpty) {
+      return result['name'];
+    }
+    
+    // Fallback to first part of display_name
+    final displayName = result['display_name'] ?? '';
+    final parts = displayName.split(',');
+    return parts.isNotEmpty ? parts.first.trim() : 'Unknown Location';
+  }
+  
+  // Handle OSM suggestion selection
+  Future<void> _handleOSMSuggestionSelection(AutocompleteSuggestion suggestion) async {
+    setState(() {
+      _isSearching = true;
+    });
 
-		// Show success message
-		ScaffoldMessenger.of(context).showSnackBar(
-		  SnackBar(
-			content: Row(
-			  children: [
-				const Icon(Icons.location_on, color: Colors.white),
-				const SizedBox(width: 8),
-				Expanded(child: Text('Found: ${suggestion.mainText}')),
-			  ],
-			),
-			backgroundColor: Colors.green,
-			duration: const Duration(seconds: 2),
-		  ),
-		);
+    try {
+      // For OSM suggestions, we can directly trigger the search
+      // since we already have the location info in the description
+      
+      // Trigger map search with the suggestion text
+      final mapState = _mapKey.currentState as dynamic;
+      if (mapState != null) {
+        await mapState.performSearch(suggestion.mainText);
+      }
 
-	  } catch (e) {
-		ScaffoldMessenger.of(context).showSnackBar(
-		  SnackBar(
-			content: Text('Error finding location: $e'),
-			backgroundColor: Colors.red,
-		  ),
-		);
-	  }
+      // Show success message
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Row(
+            children: [
+              const Icon(Icons.location_on, color: Colors.white),
+              const SizedBox(width: 8),
+              Expanded(child: Text('Found: ${suggestion.mainText}')),
+            ],
+          ),
+          backgroundColor: Colors.green,
+          duration: const Duration(seconds: 2),
+        ),
+      );
 
-	  if (mounted) {
-		setState(() {
-		  _isSearching = false;
-		});
-	  }
-	}
-	
-	Future<bool> _isHuaweiDevice() async {
-	  try {
-		DeviceInfoPlugin deviceInfo = DeviceInfoPlugin();
-		AndroidDeviceInfo androidInfo = await deviceInfo.androidInfo;
-		final manufacturer = androidInfo.manufacturer.toLowerCase();
-		final brand = androidInfo.brand.toLowerCase();
-		
-		return manufacturer.contains('huawei') || 
-			   brand.contains('huawei') ||
-			   manufacturer.contains('honor') ||
-			   brand.contains('honor');
-	  } catch (e) {
-		return false;
-	  }
-	}
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Error finding location: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
 
-	Future<void> _showHuaweiNotificationHelp() async {
-	  final isHuawei = await _isHuaweiDevice();
-	  
-	  if (!isHuawei) {
-		ScaffoldMessenger.of(context).showSnackBar(
-		  const SnackBar(content: Text('This feature is for Huawei devices only')),
-		);
-		return;
-	  }
+    if (mounted) {
+      setState(() {
+        _isSearching = false;
+      });
+    }
+  }
+  
+  Future<bool> _isHuaweiDevice() async {
+    try {
+      DeviceInfoPlugin deviceInfo = DeviceInfoPlugin();
+      AndroidDeviceInfo androidInfo = await deviceInfo.androidInfo;
+      final manufacturer = androidInfo.manufacturer.toLowerCase();
+      final brand = androidInfo.brand.toLowerCase();
+      
+      return manufacturer.contains('huawei') || 
+             brand.contains('huawei') ||
+             manufacturer.contains('honor') ||
+             brand.contains('honor');
+    } catch (e) {
+      return false;
+    }
+  }
 
-	  showDialog(
-		context: context,
-		builder: (context) => AlertDialog(
-		  title: Text('Turn Off Pop-ups'),
-		  content: Container(
-			height: 200,
-			child: Column(
-			  children: [
-				Text('1. Settings → Apps → Locado'),
-				Text('2. Tap "Notifications"'),
-				Text('3. Turn off "Banner notifications"'),
-				Text('4. Keep "Status bar" ON'),
-			  ],
-			),
-		  ),
-		  actions: [
-			TextButton(
-			  onPressed: () => Navigator.pop(context),
-			  child: Text('Cancel'),
-			),
-			ElevatedButton(
-			  onPressed: () {
-				Navigator.pop(context);
-				AppSettings.openAppSettings(type: AppSettingsType.notification);
-			  },
-			  child: Text('Open Settings'),
-			),
-		  ],
-		),
-	  );
-	}
+  Future<void> _showHuaweiNotificationHelp() async {
+    final isHuawei = await _isHuaweiDevice();
+    
+    if (!isHuawei) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('This feature is for Huawei devices only')),
+      );
+      return;
+    }
 
-	// Helper widget za instrukcije
-	Widget _buildInstructionStep(String number, String title, String description, IconData icon) {
-	  return Row(
-		crossAxisAlignment: CrossAxisAlignment.start,
-		children: [
-		  Container(
-			width: 24,
-			height: 24,
-			decoration: BoxDecoration(
-			  color: Colors.orange,
-			  shape: BoxShape.circle,
-			),
-			child: Center(
-			  child: Text(
-				number,
-				style: TextStyle(
-				  color: Colors.white,
-				  fontSize: 12,
-				  fontWeight: FontWeight.bold,
-				),
-			  ),
-			),
-		  ),
-		  SizedBox(width: 12),
-		  Icon(icon, color: Colors.orange, size: 20),
-		  SizedBox(width: 8),
-		  Expanded(
-			child: Column(
-			  crossAxisAlignment: CrossAxisAlignment.start,
-			  children: [
-				Text(
-				  title,
-				  style: TextStyle(
-					fontWeight: FontWeight.w600,
-					fontSize: 14,
-				  ),
-				),
-				SizedBox(height: 2),
-				Text(
-				  description,
-				  style: TextStyle(
-					color: Colors.grey.shade600,
-					fontSize: 12,
-				  ),
-				),
-			  ],
-			),
-		  ),
-		],
-	  );
-	}
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Turn Off Pop-ups'),
+        content: Container(
+          height: 200,
+          child: const Column(
+            children: [
+              Text('1. Settings → Apps → Locado'),
+              Text('2. Tap "Notifications"'),
+              Text('3. Turn off "Banner notifications"'),
+              Text('4. Keep "Status bar" ON'),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.pop(context);
+              AppSettings.openAppSettings(type: AppSettingsType.notification);
+            },
+            child: const Text('Open Settings'),
+          ),
+        ],
+      ),
+    );
+  }
 
-	// Otvara notification settings
-	Future<void> _openNotificationSettings() async {
-	  try {
-		await AppSettings.openAppSettings(type: AppSettingsType.notification);
-		
-		// Prikaži success message nakon kratke pauze
-		Future.delayed(Duration(seconds: 1), () {
-		  if (mounted) {
-			ScaffoldMessenger.of(context).showSnackBar(
-			  SnackBar(
-				content: Row(
-				  children: [
-					Icon(Icons.info, color: Colors.white),
-					SizedBox(width: 8),
-					Text('Look for notification categories and turn off pop-ups'),
-				  ],
-				),
-				backgroundColor: Colors.orange,
-				duration: Duration(seconds: 4),
-			  ),
-			);
-		  }
-		});
-		
-	  } catch (e) {
-		ScaffoldMessenger.of(context).showSnackBar(
-		  SnackBar(
-			content: Text('Could not open settings: $e'),
-			backgroundColor: Colors.red,
-		  ),
-		);
-	  }
-	}
+  // Helper widget for instructions
+  Widget _buildInstructionStep(String number, String title, String description, IconData icon) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          width: 24,
+          height: 24,
+          decoration: const BoxDecoration(
+            color: Colors.orange,
+            shape: BoxShape.circle,
+          ),
+          child: Center(
+            child: Text(
+              number,
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 12,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(width: 12),
+        Icon(icon, color: Colors.orange, size: 20),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                title,
+                style: const TextStyle(
+                  fontWeight: FontWeight.w600,
+                  fontSize: 14,
+                ),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                description,
+                style: TextStyle(
+                  color: Colors.grey.shade600,
+                  fontSize: 12,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  // Open notification settings
+  Future<void> _openNotificationSettings() async {
+    try {
+      await AppSettings.openAppSettings(type: AppSettingsType.notification);
+      
+      // Show success message after short pause
+      Future.delayed(const Duration(seconds: 1), () {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Row(
+                children: [
+                  Icon(Icons.info, color: Colors.white),
+                  SizedBox(width: 8),
+                  Text('Look for notification categories and turn off pop-ups'),
+                ],
+              ),
+              backgroundColor: Colors.orange,
+              duration: Duration(seconds: 4),
+            ),
+          );
+        }
+      });
+      
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Could not open settings: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
+  }
 }
