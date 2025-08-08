@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:provider/provider.dart';
+import 'package:provider/provider.dart'; // Still needed for AppBootstrapService
 import 'package:locado_final/screens/notification_service.dart';
 import 'package:locado_final/screens/main_navigation_screen.dart';
 import 'package:locado_final/screens/settings_screen.dart';
@@ -13,31 +13,65 @@ import 'package:timezone/timezone.dart' as tz;
 import 'package:locado_final/screens/notification_service.dart';
 import 'screens/battery_onboarding_screen.dart';
 import 'services/onboarding_service.dart';
-import 'theme/theme_provider.dart';
-import 'theme/app_theme.dart';
+// REMOVED: theme_provider and app_theme imports - no more dark mode
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 
 // ✅ NOVO: Dodaj file intent handler
 import 'helpers/file_intent_handler.dart';
 
+// 🚀 NOVO: Import bootstrap service
+import 'services/app_bootstrap_service.dart';
+
+// ADDED: Static light theme definition (replaces dynamic theming)
+class StaticAppTheme {
+  static final ThemeData lightTheme = ThemeData(
+    useMaterial3: true,
+    colorScheme: ColorScheme.fromSeed(
+      seedColor: Colors.teal,
+      brightness: Brightness.light,
+    ),
+    primarySwatch: Colors.teal,
+    scaffoldBackgroundColor: Colors.grey.shade50,
+    appBarTheme: AppBarTheme(
+      backgroundColor: Colors.teal,
+      foregroundColor: Colors.white,
+      elevation: 2,
+    ),
+    cardTheme: CardThemeData(
+      elevation: 2,
+      color: Colors.white,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+    ),
+    elevatedButtonTheme: ElevatedButtonThemeData(
+      style: ElevatedButton.styleFrom(
+        backgroundColor: Colors.teal,
+        foregroundColor: Colors.white,
+        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+      ),
+    ),
+    floatingActionButtonTheme: FloatingActionButtonThemeData(
+      backgroundColor: Colors.teal,
+      foregroundColor: Colors.white,
+    ),
+  );
+}
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  
+  // 🚀 PHASE 1: Only essential synchronous initialization
+  print('🚀 MAIN: Starting Phase 1 - Essential setup');
+  
+  // Load environment variables (synchronous)
   await dotenv.load(fileName: ".env");
 
+  // Initialize timezones (synchronous)
   tz.initializeTimeZones();
+  await _initializeTimezone();
 
-  // Try to set local timezone, fallback to Europe/Belgrade
-  try {
-    final timeZoneName = await _getLocalTimeZone();
-    tz.setLocalLocation(tz.getLocation(timeZoneName));
-    print('✅ Timezone set to: $timeZoneName');
-  } catch (e) {
-    print('⚠️ Failed to set timezone, using Europe/Belgrade: $e');
-    tz.setLocalLocation(tz.getLocation('Europe/Belgrade'));
-  }
-
-  // 🆕 DETEKTUJ LOCK SCREEN MODE
+  // 🆕 Check lock screen mode (must be synchronous)
   bool isLockScreenMode = await _detectLockScreenMode();
 
   if (isLockScreenMode) {
@@ -46,23 +80,26 @@ void main() async {
     return;
   }
 
-  print('📱 NORMAL MODE: Launching main app');
+  print('📱 NORMAL MODE: Launching main app with bootstrap service');
 
-  // Inicijalizuj notifikacije
-  await initializeNotifications();
+  // 🚀 PHASE 2: Start app with bootstrap service
+  // Initialize bootstrap service but don't wait for completion
+  AppBootstrapService.instance.initializeApp();
 
-  // Initialize app-level geofencing
-  await AppGeofencingController.instance.initializeApp();
-
-  // ✅ NOVO: Initialize file intent handler for .locado files
-  try {
-    FileIntentHandler.initialize();
-    print('✅ MAIN: File intent handler initialized');
-  } catch (e) {
-    print('⚠️ MAIN: File intent handler initialization failed: $e');
-  }
-
+  // Start the app immediately - bootstrap will continue in background
   runApp(const MyApp());
+}
+
+/// Initialize timezone with fallback
+Future<void> _initializeTimezone() async {
+  try {
+    final timeZoneName = await _getLocalTimeZone();
+    tz.setLocalLocation(tz.getLocation(timeZoneName));
+    print('✅ MAIN: Timezone set to: $timeZoneName');
+  } catch (e) {
+    print('⚠️ MAIN: Failed to set timezone, using Europe/Belgrade: $e');
+    tz.setLocalLocation(tz.getLocation('Europe/Belgrade'));
+  }
 }
 
 /// 🆕 DETEKTUJ DA LI JE POKRENUT IZ TASK DETAIL FLUTTER ACTIVITY
@@ -104,35 +141,25 @@ Future<String> _getLocalTimeZone() async {
   }
 }
 
-/// 🆕 TASK DETAIL APP ZA LOCK SCREEN (with theme support)
+/// 🆕 TASK DETAIL APP ZA LOCK SCREEN (simplified - light theme only)
 class TaskDetailApp extends StatelessWidget {
   // ✅ NOVO: Navigator key za task detail app
   static final GlobalKey<NavigatorState> taskDetailNavigatorKey = GlobalKey<NavigatorState>();
 
   @override
   Widget build(BuildContext context) {
-    return ChangeNotifierProvider(
-      create: (context) => ThemeProvider(),
-      builder: (context, child) {
-        return Consumer<ThemeProvider>(
-          builder: (context, themeProvider, child) {
-            return MaterialApp(
-              navigatorKey: taskDetailNavigatorKey, // ✅ NOVO: Dodano
-              debugShowCheckedModeBanner: false,
-              title: 'Locado Task Detail',
-              theme: AppTheme.lightTheme,
-              darkTheme: AppTheme.darkTheme,
-              themeMode: themeProvider.isInitialized ? themeProvider.themeMode : ThemeMode.light,
-              home: TaskDetailBridge(),
-            );
-          },
-        );
-      },
+    // SIMPLIFIED: No theme provider, static light theme only
+    return MaterialApp(
+      navigatorKey: taskDetailNavigatorKey,
+      debugShowCheckedModeBanner: false,
+      title: 'Locado Task Detail',
+      theme: StaticAppTheme.lightTheme, // Static theme
+      home: TaskDetailBridge(),
     );
   }
 }
 
-/// 🔒 GLAVNA APLIKACIJA (normalni mode)
+/// 🔒 GLAVNA APLIKACIJA (normalni mode) - Optimized without theme provider
 class MyApp extends StatelessWidget {
   const MyApp({super.key});
 
@@ -141,27 +168,23 @@ class MyApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ChangeNotifierProvider(
-      create: (context) => ThemeProvider(),
+    // SIMPLIFIED: Only bootstrap service provider, no theme provider
+    return ChangeNotifierProvider.value(
+      value: AppBootstrapService.instance,
       builder: (context, child) {
-        return Consumer<ThemeProvider>(
-          builder: (context, themeProvider, child) {
-            return MaterialApp(
-              navigatorKey: navigatorKey, // ✅ NOVO: Dodano za file intent handling
-              debugShowCheckedModeBanner: false,
-              title: 'Locado',
-              theme: AppTheme.lightTheme,
-              darkTheme: AppTheme.darkTheme,
-              themeMode: themeProvider.isInitialized ? themeProvider.themeMode : ThemeMode.light,
-              initialRoute: '/',
-              routes: {
-                //'/': (context) => const HomeMapScreen(),
-                '/': (context) => const MainNavigationScreen(),
-                '/pick-location': (context) => const GooglePickLocationScreen(),
-                '/onboarding': (context) => const BatteryOnboardingScreen(),
-                '/settings': (context) => const SettingsScreen(),
-              },
-            );
+        // SIMPLIFIED: No Consumer for theme, static theme only
+        return MaterialApp(
+          navigatorKey: navigatorKey,
+          debugShowCheckedModeBanner: false,
+          title: 'Locado',
+          theme: StaticAppTheme.lightTheme, // Static light theme
+          // REMOVED: darkTheme and themeMode - no dark mode support
+          initialRoute: '/',
+          routes: {
+            '/': (context) => const BootstrapAwareMainScreen(),
+            '/pick-location': (context) => const GooglePickLocationScreen(),
+            '/onboarding': (context) => const BatteryOnboardingScreen(),
+            '/settings': (context) => const SettingsScreen(),
           },
         );
       },
@@ -169,7 +192,151 @@ class MyApp extends StatelessWidget {
   }
 }
 
-// ✅ NOVO: Navigation service za file intent handler
+/// 🚀 OPTIMIZED: Bootstrap-aware main screen wrapper (no theme dependency)
+class BootstrapAwareMainScreen extends StatefulWidget {
+  const BootstrapAwareMainScreen({super.key});
+
+  @override
+  State<BootstrapAwareMainScreen> createState() => _BootstrapAwareMainScreenState();
+}
+
+class _BootstrapAwareMainScreenState extends State<BootstrapAwareMainScreen> {
+  @override
+  void initState() {
+    super.initState();
+    _initializeBackgroundServices();
+  }
+
+  /// Initialize services that were previously in main()
+  Future<void> _initializeBackgroundServices() async {
+    // These can now run in parallel with UI rendering
+    try {
+      // Initialize notifications (moved from main)
+      await initializeNotifications();
+      print('✅ BOOTSTRAP: Notifications initialized');
+
+      // Initialize app-level geofencing (moved from main)
+      await AppGeofencingController.instance.initializeApp();
+      print('✅ BOOTSTRAP: App geofencing initialized');
+
+      // Initialize file intent handler (moved from main)
+      FileIntentHandler.initialize();
+      print('✅ BOOTSTRAP: File intent handler initialized');
+
+    } catch (e) {
+      print('⚠️ BOOTSTRAP: Error in background services: $e');
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Consumer<AppBootstrapService>(
+      builder: (context, bootstrap, child) {
+        // Show loading screen only if Phase 1 is not complete
+        if (!bootstrap.phase1Complete) {
+          return _buildLoadingScreen(bootstrap);
+        }
+
+        // Show main screen as soon as Phase 1 is complete
+        // Phase 2 and 3 continue in background
+        return const MainNavigationScreen();
+      },
+    );
+  }
+
+  /// Build loading screen with bootstrap progress (static styling)
+  Widget _buildLoadingScreen(AppBootstrapService bootstrap) {
+    return Scaffold(
+      backgroundColor: Colors.white, // Static white background
+      body: Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            // App logo or icon
+            const Icon(
+              Icons.location_on,
+              size: 64,
+              color: Colors.teal, // Static teal color
+            ),
+            const SizedBox(height: 24),
+            
+            // App name
+            const Text(
+              'Locado',
+              style: TextStyle(
+                fontSize: 32,
+                fontWeight: FontWeight.bold,
+                color: Colors.teal, // Static teal color
+              ),
+            ),
+            
+            const SizedBox(height: 48),
+            
+            // Progress indicator
+            SizedBox(
+              width: 200,
+              child: LinearProgressIndicator(
+                value: bootstrap.progress,
+                backgroundColor: Colors.grey, // Static colors
+                valueColor: const AlwaysStoppedAnimation<Color>(Colors.teal),
+              ),
+            ),
+            
+            const SizedBox(height: 16),
+            
+            // Current step
+            Text(
+              bootstrap.currentStep,
+              style: const TextStyle(
+                fontSize: 14,
+                color: Colors.grey, // Static color
+              ),
+              textAlign: TextAlign.center,
+            ),
+            
+            // Error message if any
+            if (bootstrap.errorMessage != null) ...[
+              const SizedBox(height: 24),
+              Container(
+                padding: const EdgeInsets.all(16),
+                margin: const EdgeInsets.symmetric(horizontal: 32),
+                decoration: BoxDecoration(
+                  color: Colors.red.shade50, // Static error styling
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.red.shade200),
+                ),
+                child: Column(
+                  children: [
+                    const Icon(Icons.error, color: Colors.red, size: 24),
+                    const SizedBox(height: 8),
+                    Text(
+                      'Initialization Error',
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        color: Colors.red.shade700,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      bootstrap.errorMessage!,
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.red.shade600,
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ✅ OPTIMIZED: Navigation service (no theme dependency)
 class NavigationService {
   static GlobalKey<NavigatorState> navigatorKey = MyApp.navigatorKey;
   
@@ -209,7 +376,7 @@ class NavigationService {
     }
   }
   
-  /// Show snackbar message
+  /// Show snackbar message (static styling)
   static void showSnackBar({
     required String message,
     Color? backgroundColor,
