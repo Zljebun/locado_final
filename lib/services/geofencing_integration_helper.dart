@@ -175,33 +175,22 @@ class GeofencingIntegrationHelper {
     }
   }
 
-  Future<void> _batchLoadTasksToGeofencing() async {
-    try {
-      final taskLocations = await DatabaseHelper.instance.getAllTaskLocations();
+	Future<void> _batchLoadTasksToGeofencing() async {
+	  try {
+		final taskLocations = await DatabaseHelper.instance.getAllTaskLocations();
 
-      if (taskLocations.isEmpty) return;
+		if (taskLocations.isEmpty) return;
 
-      // DODAJ SVE TASK-OVE PARALLELNO - NIJE SEKVENCIJALNO!
-      final futures = taskLocations.map((task) =>
-          LocadoBackgroundService.addGeofence(
-            id: 'task_${task.id}',
-            latitude: task.latitude,
-            longitude: task.longitude,
-            radius: 100.0,
-            title: task.title,
-          )
-      ).toList();
+		// 🚀 BATCH PROCESSING - PRAVI BATCH!
+		await LocadoBackgroundService.syncTaskLocationGeofences(taskLocations);
 
-      // ČEKAJ DA SE SVI ZAVRŠE ODJEDNOM
-      await Future.wait(futures);
+		// JEDAN REFRESH NA KRAJU
+		await _refreshActiveGeofences();
 
-      // JEDAN REFRESH NA KRAJU
-      await _refreshActiveGeofences();
-
-    } catch (e) {
-      debugPrint('❌ Batch loading error: $e');
-    }
-  }
+	  } catch (e) {
+		debugPrint('❌ Batch loading error: $e');
+	  }
+	}
 
   /// Dodaje pojedinačni task u geofencing sistem
   Future<bool> addTaskToGeofencing({

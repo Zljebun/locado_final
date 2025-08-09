@@ -28,6 +28,7 @@ import 'package:app_settings/app_settings.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'dart:io';
 import '../services/app_bootstrap_service.dart';
+import '../services/task_location_cache.dart';
 
 
 // Helper class for task distance calculations
@@ -167,40 +168,86 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
 
 	/// Async task data loading - doesn't block UI
 	Future<void> _loadTaskDataAsync() async {
-	  print('🔄 MAIN NAV ASYNC: Starting async task data loading...');
+	  print('🚀 CACHE: Starting optimized task data loading...');
 	  
 	  try {
-		// Step 1: Show loading state
+		// Step 1: Show loading state briefly
 		if (mounted) {
 		  setState(() {
 			_isLoadingTasks = true;
 		  });
 		}
 		
-		// Step 2: Load basic tasks from database (fast)
-		final tasks = await DatabaseHelper.instance.getAllTaskLocations();
-		print('🔄 MAIN NAV ASYNC: Loaded ${tasks.length} tasks from database');
+		// Step 2: INSTANT - Load from cache first (1-5ms)
+		print('🚀 CACHE: Loading tasks from cache...');
+		final cachedTasks = await TaskLocationCache.instance.getInstantTasks();
 		
-		// Step 3: Update UI with basic tasks (no distances yet)
-		if (mounted) {
-		  _cachedTasks = tasks;
-		  _cachedSortedTasks = tasks.map((task) => TaskWithDistance(task, 0.0)).toList();
+		if (cachedTasks.isNotEmpty && mounted) {
+		  // INSTANT UI UPDATE with cached data
+		  _cachedTasks = cachedTasks;
+		  _cachedSortedTasks = cachedTasks.map((task) => TaskWithDistance(task, 0.0)).toList();
 		  
 		  setState(() {
 			_isLoadingTasks = false;
-			_isLoadingDistance = false; // Show tasks immediately
+			_isLoadingDistance = false;
 		  });
 		  
-		  print('🔄 MAIN NAV ASYNC: UI updated with basic task data');
+		  print('🚀 CACHE: UI updated instantly with ${cachedTasks.length} cached tasks');
+		  
+		  // Start distance calculation for cached tasks in background
+		  _calculateDistancesInBackground(cachedTasks);
+		} else {
+		  print('ℹ️ CACHE: No cache available, will load from database');
 		}
 		
-		// Step 4: Calculate distances in background (slow operation)
-		if (tasks.isNotEmpty) {
-		  _calculateDistancesInBackground(tasks);
-		}
+		// Step 3: BACKGROUND - Refresh from database (don't block UI)
+		Future.delayed(const Duration(milliseconds: 100), () async {
+		  try {
+			print('🔄 CACHE: Refreshing from database in background...');
+			final freshTasks = await DatabaseHelper.instance.getAllTaskLocations();
+			
+			// Update cache with fresh data
+			await TaskLocationCache.instance.updateCache(freshTasks);
+			
+			// Check if data changed
+			bool dataChanged = false;
+			if (_cachedTasks == null || _cachedTasks!.length != freshTasks.length) {
+			  dataChanged = true;
+			} else {
+			  // Check if any task IDs are different
+			  final cachedIds = _cachedTasks!.map((t) => t.id).toSet();
+			  final freshIds = freshTasks.map((t) => t.id).toSet();
+			  dataChanged = !cachedIds.containsAll(freshIds) || !freshIds.containsAll(cachedIds);
+			}
+			
+			// Only update UI if data actually changed
+			if (dataChanged && mounted) {
+			  _cachedTasks = freshTasks;
+			  _cachedSortedTasks = freshTasks.map((task) => TaskWithDistance(task, 0.0)).toList();
+			  
+			  setState(() {
+				_isLoadingTasks = false;
+				_isLoadingDistance = false;
+			  });
+			  
+			  print('🔄 CACHE: UI updated with fresh data (${freshTasks.length} tasks)');
+			  
+			  // Recalculate distances with fresh data
+			  if (freshTasks.isNotEmpty) {
+				_calculateDistancesInBackground(freshTasks);
+			  }
+			} else {
+			  print('✅ CACHE: No data changes, cache is up to date');
+			}
+			
+		  } catch (e) {
+			print('❌ CACHE: Error refreshing from database: $e');
+			// Don't update UI on error - keep showing cached data
+		  }
+		});
 		
 	  } catch (e) {
-		print('❌ MAIN NAV ASYNC: Error loading tasks: $e');
+		print('❌ CACHE: Error in optimized loading: $e');
 		if (mounted) {
 		  _cachedTasks = [];
 		  _cachedSortedTasks = [];
@@ -209,6 +256,36 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
 			_isLoadingDistance = false;
 		  });
 		}
+	  }
+	}
+	
+	/// Update cache when new task is added
+	Future<void> _syncCacheAfterTaskAdd(TaskLocation newTask) async {
+	  try {
+		await TaskLocationCache.instance.addTaskToCache(newTask);
+		print('✅ CACHE: Added new task to cache: ${newTask.title}');
+	  } catch (e) {
+		print('❌ CACHE: Error adding task to cache: $e');
+	  }
+	}
+
+	/// Update cache when task is deleted
+	Future<void> _syncCacheAfterTaskDelete(int taskId) async {
+	  try {
+		await TaskLocationCache.instance.removeTaskFromCache(taskId);
+		print('✅ CACHE: Removed task from cache: $taskId');
+	  } catch (e) {
+		print('❌ CACHE: Error removing task from cache: $e');
+	  }
+	}
+
+	/// Update cache when task is modified
+	Future<void> _syncCacheAfterTaskUpdate(TaskLocation updatedTask) async {
+	  try {
+		await TaskLocationCache.instance.updateTaskInCache(updatedTask);
+		print('✅ CACHE: Updated task in cache: ${updatedTask.title}');
+	  } catch (e) {
+		print('❌ CACHE: Error updating task in cache: $e');
 	  }
 	}
 
@@ -520,44 +597,44 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
   }
 
   // Get current page widget based on selected tab
-  Widget _getCurrentPage() {
-    switch (_currentIndex) {
-      case 0:
-        return HomeMapScreen(
-          key: _mapKey,
-          selectedLocation: widget.selectedLocation,
-        );
-	case 1:
-	  return AILocationSearchScreen(
-		onTasksCreated: () {
-		  print('🔄 AI SEARCH: Tasks created callback triggered');
-		  
-		  setState(() {
-			_currentIndex = 0; // Switch to map tab
-		  });
-		  
-		  // Reload task data when new tasks are created
-		  Future.delayed(const Duration(milliseconds: 100), () {
-			if (mounted) {
-			  print('🔄 AI SEARCH: Reloading task data after AI task creation');
-			  _loadTaskData();
-			}
-		  });
-		},
-	  );
-      case 2:
-        return _buildTaskListPage();
-      case 3:
-        return const CalendarScreen();
-      case 4:
-        return _buildMorePage();
-      default:
-        return HomeMapScreen(
-          key: _mapKey,
-          selectedLocation: widget.selectedLocation,
-        );
-    }
-  }
+	  Widget _getCurrentPage() {
+		switch (_currentIndex) {
+		  case 0:
+			return HomeMapScreen(
+			  key: _mapKey,
+			  selectedLocation: widget.selectedLocation,
+			);
+		case 1:
+		  return AILocationSearchScreen(
+			onTasksCreated: () {
+			  print('🔄 AI SEARCH: Tasks created callback triggered');
+			  
+			  setState(() {
+				_currentIndex = 0; // Switch to map tab
+			  });
+			  
+			  // Reload task data when new tasks are created (will use cache first)
+			  Future.delayed(const Duration(milliseconds: 100), () {
+				if (mounted) {
+				  print('🔄 AI SEARCH: Reloading task data after AI task creation');
+				  _loadTaskData(); // Will use optimized cache loading
+				}
+			  });
+			},
+		  );
+		  case 2:
+			return _buildTaskListPage();
+		  case 3:
+			return const CalendarScreen();
+		  case 4:
+			return _buildMorePage();
+		  default:
+			return HomeMapScreen(
+			  key: _mapKey,
+			  selectedLocation: widget.selectedLocation,
+			);
+		}
+	  }
 
   // Calculate distance between two points
   double _calculateDistance(double lat1, double lon1, double lat2, double lon2) {
@@ -795,77 +872,78 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
   }
 
   // Delete selected tasks - with cache refresh
-  Future<void> _deleteSelectedTasks() async {
-    if (_selectedTaskIds.isEmpty) return;
+	Future<void> _deleteSelectedTasks() async {
+	  if (_selectedTaskIds.isEmpty) return;
 
-    final selectedCount = _selectedTaskIds.length;
+	  final selectedCount = _selectedTaskIds.length;
 
-    // Show confirmation dialog
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Delete Selected Tasks'),
-        content: Text(
-            'Are you sure you want to delete $selectedCount selected task${selectedCount > 1 ? 's' : ''}?'
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
-          ),
-          ElevatedButton(
-            onPressed: () => Navigator.pop(context, true),
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
-            child: const Text('Delete', style: TextStyle(color: Colors.white)),
-          ),
-        ],
-      ),
-    );
+	  // Show confirmation dialog
+	  final confirmed = await showDialog<bool>(
+		context: context,
+		builder: (context) => AlertDialog(
+		  title: const Text('Delete Selected Tasks'),
+		  content: Text(
+			  'Are you sure you want to delete $selectedCount selected task${selectedCount > 1 ? 's' : ''}?'
+		  ),
+		  actions: [
+			TextButton(
+			  onPressed: () => Navigator.pop(context, false),
+			  child: const Text('Cancel'),
+			),
+			ElevatedButton(
+			  onPressed: () => Navigator.pop(context, true),
+			  style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+			  child: const Text('Delete', style: TextStyle(color: Colors.white)),
+			),
+		  ],
+		),
+	  );
 
-    if (confirmed != true) return;
+	  if (confirmed != true) return;
 
-    setState(() {
-      _isDeleting = true;
-    });
+	  setState(() {
+		_isDeleting = true;
+	  });
 
-    try {
-      // Delete all selected tasks
-      for (final taskId in _selectedTaskIds) {
-        await DatabaseHelper.instance.deleteTaskLocation(taskId);
-      }
+	  try {
+		// Delete all selected tasks from database AND cache
+		for (final taskId in _selectedTaskIds) {
+		  await DatabaseHelper.instance.deleteTaskLocation(taskId);
+		  await _syncCacheAfterTaskDelete(taskId); // CACHE SYNC
+		}
 
-      // Show success message
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('$selectedCount task${selectedCount > 1 ? 's' : ''} deleted successfully'),
-          backgroundColor: Colors.green,
-        ),
-      );
+		// Show success message
+		ScaffoldMessenger.of(context).showSnackBar(
+		  SnackBar(
+			content: Text('$selectedCount task${selectedCount > 1 ? 's' : ''} deleted successfully'),
+			backgroundColor: Colors.green,
+		  ),
+		);
 
-      // Exit selection mode and refresh data
-      setState(() {
-        _isSelectionMode = false;
-        _selectedTaskIds.clear();
-        _isDeleting = false;
-      });
+		// Exit selection mode and refresh data
+		setState(() {
+		  _isSelectionMode = false;
+		  _selectedTaskIds.clear();
+		  _isDeleting = false;
+		});
 
-      // Reload task data after deletion
-      await _loadTaskData();
+		// Reload task data after deletion (will use cache first)
+		await _loadTaskData();
 
-    } catch (e) {
-      // Show error message
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Error deleting tasks: $e'),
-          backgroundColor: Colors.red,
-        ),
-      );
+	  } catch (e) {
+		// Show error message
+		ScaffoldMessenger.of(context).showSnackBar(
+		  SnackBar(
+			content: Text('Error deleting tasks: $e'),
+			backgroundColor: Colors.red,
+		  ),
+		);
 
-      setState(() {
-        _isDeleting = false;
-      });
-    }
-  }
+		setState(() {
+		  _isDeleting = false;
+		});
+	  }
+	}
 
 	Widget _buildTaskListPage() {
 
@@ -1510,53 +1588,56 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
     );
   }
 
-  Future<void> _performFileImport() async {
-    try {
-      final status = await Permission.storage.request();
-      if (!status.isGranted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Storage permission denied')),
-        );
-        return;
-      }
+	Future<void> _performFileImport() async {
+	  try {
+		final status = await Permission.storage.request();
+		if (!status.isGranted) {
+		  ScaffoldMessenger.of(context).showSnackBar(
+			const SnackBar(content: Text('Storage permission denied')),
+		  );
+		  return;
+		}
 
-      FilePickerResult? result = await FilePicker.platform.pickFiles(
-        type: FileType.any,
-      );
+		FilePickerResult? result = await FilePicker.platform.pickFiles(
+		  type: FileType.any,
+		);
 
-      if (result != null && result.files.single.path != null) {
-        final path = result.files.single.path!;
+		if (result != null && result.files.single.path != null) {
+		  final path = result.files.single.path!;
 
-        if (!path.toLowerCase().endsWith('.json')) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Please select a .json file')),
-          );
-          return;
-        }
+		  if (!path.toLowerCase().endsWith('.json')) {
+			ScaffoldMessenger.of(context).showSnackBar(
+			  const SnackBar(content: Text('Please select a .json file')),
+			);
+			return;
+		  }
 
-        final file = File(path);
-        final jsonString = await file.readAsString();
-        final Map<String, dynamic> data = jsonDecode(jsonString);
+		  final file = File(path);
+		  final jsonString = await file.readAsString();
+		  final Map<String, dynamic> data = jsonDecode(jsonString);
 
-        final task = TaskLocation.fromMap(data);
-        await DatabaseHelper.instance.addTaskLocation(task);
+		  final task = TaskLocation.fromMap(data);
+		  await DatabaseHelper.instance.addTaskLocation(task);
+		  
+		  // CACHE SYNC: Add to cache immediately
+		  await _syncCacheAfterTaskAdd(task);
 
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Task imported successfully'),
-            backgroundColor: Colors.green,
-          ),
-        );
+		  ScaffoldMessenger.of(context).showSnackBar(
+			const SnackBar(
+			  content: Text('Task imported successfully'),
+			  backgroundColor: Colors.green,
+			),
+		  );
 
-        print('🔄 FILE IMPORT: Task imported, reloading data...');
-        await _loadTaskData();
-      }
-    } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Import error: $e')),
-      );
-    }
-  }
+		  print('🔄 FILE IMPORT: Task imported, reloading data...');
+		  await _loadTaskData(); // Will use cache first
+		}
+	  } catch (e) {
+		ScaffoldMessenger.of(context).showSnackBar(
+		  SnackBar(content: Text('Import error: $e')),
+		);
+	  }
+	}
 
   @override
   Widget build(BuildContext context) {
@@ -1632,7 +1713,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
 
 			if (result == true) {
 			  print('🔄 FAB: Result is true, reloading task data...');
-			  // Reload task data after new task is added
+			  // Reload task data after new task is added (will use cache first)
 			  await _loadTaskData();
 			}
 		  },

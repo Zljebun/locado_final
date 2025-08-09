@@ -133,6 +133,113 @@ class LocadoBackgroundService {
       return false;
     }
   }
+  
+ /// 🚀 NEW: Batch add geofences - OPTIMIZED for multiple locations
+  static Future<bool> addGeofencesBatch(List<Map<String, dynamic>> geofences) async {
+    try {
+      debugPrint('LocadoBackgroundService: Adding ${geofences.length} geofences via BATCH processing');
+      
+      final result = await _methodChannel.invokeMethod('addGeofencesBatch', {
+        'geofences': geofences,
+      });
+      
+      debugPrint('LocadoBackgroundService: Batch result = $result');
+      return result != null && result.toString().contains('geofences added');
+    } catch (e) {
+      debugPrint('LocadoBackgroundService: addGeofencesBatch error = $e');
+      return false;
+    }
+  }
+
+  /// 🚀 NEW: Batch remove geofences - OPTIMIZED for multiple removals
+  static Future<bool> removeGeofencesBatch(List<String> geofenceIds) async {
+    try {
+      debugPrint('LocadoBackgroundService: Removing ${geofenceIds.length} geofences via BATCH processing');
+      
+      final result = await _methodChannel.invokeMethod('removeGeofencesBatch', {
+        'ids': geofenceIds,
+      });
+      
+      debugPrint('LocadoBackgroundService: Batch removal result = $result');
+      return result != null && result.toString().contains('geofences removed');
+    } catch (e) {
+      debugPrint('LocadoBackgroundService: removeGeofencesBatch error = $e');
+      return false;
+    }
+  }
+
+  /// 🚀 OPTIMIZED: Fast sync with batch processing instead of individual calls
+  static Future<void> syncTaskLocationGeofences(List<TaskLocation> taskLocations) async {
+    print("🚀 BATCH: syncTaskLocationGeofences() started - using NEW batch implementation!");
+    print("🚀 BATCH: About to call addGeofencesBatch()");
+    try {
+      debugPrint('LocadoBackgroundService: 🚀 Starting OPTIMIZED sync for ${taskLocations.length} locations');
+      final startTime = DateTime.now();
+      
+      // Read radius from settings
+      final radius = await _getGeofenceRadius();
+
+      // Get current active geofences
+      final activeGeofences = await getActiveGeofences();
+
+      // Create set of task geofence IDs that should exist
+      final requiredGeofenceIds = taskLocations
+          .map((task) => 'task_${task.id}')
+          .toSet();
+
+      // 🗑️ BATCH REMOVAL: Find obsolete geofences
+      final obsoleteGeofences = activeGeofences
+          .where((activeId) => activeId.startsWith('task_') && !requiredGeofenceIds.contains(activeId))
+          .toList();
+
+      if (obsoleteGeofences.isNotEmpty) {
+        debugPrint('LocadoBackgroundService: 🗑️ Batch removing ${obsoleteGeofences.length} obsolete geofences');
+        await removeGeofencesBatch(obsoleteGeofences);
+      }
+	  
+		// 🚀 BATCH ADD: Create list of new geofences
+		final newGeofences = <Map<String, dynamic>>[];
+
+		for (final taskLocation in taskLocations) {
+		  final geofenceId = 'task_${taskLocation.id}';
+		  if (!activeGeofences.contains(geofenceId)) {
+			newGeofences.add({
+			  'id': geofenceId,
+			  'latitude': taskLocation.latitude,
+			  'longitude': taskLocation.longitude,
+			  'radius': radius,
+			  'title': taskLocation.title,
+			  'description': 'You are near: ${taskLocation.title}',
+			});
+		  }
+		}
+
+      // 🚀 BATCH ADD: Add all new geofences in one optimized call
+      if (newGeofences.isNotEmpty) {
+        debugPrint('LocadoBackgroundService: 🚀 Batch adding ${newGeofences.length} new geofences with ${radius}m radius');
+        await addGeofencesBatch(newGeofences);
+      }
+
+      // Calculate performance improvement
+      final endTime = DateTime.now();
+      final duration = endTime.difference(startTime).inMilliseconds;
+      
+      debugPrint('LocadoBackgroundService: ✅ OPTIMIZED sync completed in ${duration}ms');
+      debugPrint('LocadoBackgroundService: 📊 Performance: Processed ${taskLocations.length} locations in ${duration}ms (${(duration / taskLocations.length).toStringAsFixed(1)}ms per location)');
+
+      // Update notification with count
+      await updateNotification(
+        title: 'Locado - Location Tracking (Optimized)',
+        content: 'Monitoring ${taskLocations.length} task locations (${radius.toInt()}m radius) - Synced in ${duration}ms',
+      );
+
+    } catch (e) {
+      debugPrint('LocadoBackgroundService: ❌ Optimized sync error = $e');
+      // Fallback to old method if batch fails
+      debugPrint('LocadoBackgroundService: 🔄 Falling back to individual sync method');
+      await syncTaskLocationGeofencesOLD(taskLocations);
+    }
+  }
 
   /// Vraća listu aktivnih geofence ID-jeva
   static Future<List<String>> getActiveGeofences() async {
@@ -200,20 +307,13 @@ class LocadoBackgroundService {
     );
   }
 
-  /// Dodaje geofence za TaskLocation objekat
-  static Future<bool> addTaskLocationGeofence(TaskLocation taskLocation) async {
-    // ✅ ISPRAVKA: Čita radius iz settings-a umjesto fiksnog 100m
-    final radius = await _getGeofenceRadius();
-
-    return await addGeofence(
-      id: 'task_${taskLocation.id ?? "null"}',
-      latitude: taskLocation.latitude,
-      longitude: taskLocation.longitude,
-      radius: radius, // ✅ KORISTIMO RADIUS IZ SETTINGS-A
-      title: taskLocation.title,
-      description: 'You are near: ${taskLocation.title}',
-    );
-  }
+	static Future<bool> addTaskLocationGeofence(TaskLocation taskLocation) async {
+	
+	  // 🚀 REDIRECT to optimized batch method for single task
+	  debugPrint('LocadoBackgroundService: 🚀 Redirecting single task to batch method');
+	  await syncTaskLocationGeofences([taskLocation]);
+	  return true;
+	}
 
   /// Uklanja geofence za TaskLocation objekat
   static Future<bool> removeTaskLocationGeofence(TaskLocation taskLocation) async {
@@ -221,7 +321,8 @@ class LocadoBackgroundService {
   }
 
   /// Ažurira sve geofence-ove na osnovu liste TaskLocation objekata
-  static Future<void> syncTaskLocationGeofences(List<TaskLocation> taskLocations) async {
+  static Future<void> syncTaskLocationGeofencesOLD(List<TaskLocation> taskLocations) async {
+    print("⚠️ OLD: syncTaskLocationGeofencesOLD() called - THIS SHOULD NOT HAPPEN!");
     try {
       // ✅ ČITA RADIUS IZ SETTINGS-A
       final radius = await _getGeofenceRadius();

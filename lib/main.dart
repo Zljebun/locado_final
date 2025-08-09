@@ -61,17 +61,15 @@ class StaticAppTheme {
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   
-  // 🚀 PHASE 1: Only essential synchronous initialization
-  print('🚀 MAIN: Starting Phase 1 - Essential setup');
+  print('🚀 MAIN: Starting instant initialization');
   
-  // Load environment variables (synchronous)
+  // 🚀 ONLY ESSENTIAL: Load environment (must be synchronous)
   await dotenv.load(fileName: ".env");
 
-  // Initialize timezones (synchronous)
-  tz.initializeTimeZones();
-  await _initializeTimezone();
+  // 🚀 INSTANT: Initialize timezone in background
+  _initializeTimezoneInBackground();
 
-  // 🆕 Check lock screen mode (must be synchronous)
+  // 🚀 INSTANT: Check lock screen mode quickly
   bool isLockScreenMode = await _detectLockScreenMode();
 
   if (isLockScreenMode) {
@@ -82,24 +80,33 @@ void main() async {
 
   print('📱 NORMAL MODE: Launching main app with bootstrap service');
 
-  // 🚀 PHASE 2: Start app with bootstrap service
-  // Initialize bootstrap service but don't wait for completion
-  AppBootstrapService.instance.initializeApp();
+  // 🚀 INSTANT: Start bootstrap in background (don't await)
+  _startBootstrapInBackground();
 
-  // Start the app immediately - bootstrap will continue in background
+  // 🚀 INSTANT: Start the app immediately
   runApp(const MyApp());
 }
 
-/// Initialize timezone with fallback
-Future<void> _initializeTimezone() async {
-  try {
-    final timeZoneName = await _getLocalTimeZone();
-    tz.setLocalLocation(tz.getLocation(timeZoneName));
-    print('✅ MAIN: Timezone set to: $timeZoneName');
-  } catch (e) {
-    print('⚠️ MAIN: Failed to set timezone, using Europe/Belgrade: $e');
-    tz.setLocalLocation(tz.getLocation('Europe/Belgrade'));
-  }
+/// Initialize timezone in background
+void _initializeTimezoneInBackground() {
+  Future.delayed(const Duration(milliseconds: 100), () async {
+    try {
+      tz.initializeTimeZones();
+      final timeZoneName = await _getLocalTimeZone();
+      tz.setLocalLocation(tz.getLocation(timeZoneName));
+      print('✅ BACKGROUND: Timezone set to: $timeZoneName');
+    } catch (e) {
+      print('⚠️ BACKGROUND: Failed to set timezone: $e');
+      tz.setLocalLocation(tz.getLocation('Europe/Belgrade'));
+    }
+  });
+}
+
+/// Start bootstrap in background
+void _startBootstrapInBackground() {
+  Future.delayed(const Duration(milliseconds: 200), () {
+    AppBootstrapService.instance.initializeApp();
+  });
 }
 
 /// 🆕 DETEKTUJ DA LI JE POKRENUT IZ TASK DETAIL FLUTTER ACTIVITY
@@ -207,44 +214,72 @@ class _BootstrapAwareMainScreenState extends State<BootstrapAwareMainScreen> {
     _initializeBackgroundServices();
   }
 
-  /// Initialize services that were previously in main()
+  /// Initialize services in background - COMPLETELY NON-BLOCKING
   Future<void> _initializeBackgroundServices() async {
-    // These can now run in parallel with UI rendering
-    try {
-      // Initialize notifications (moved from main)
-      await initializeNotifications();
-      print('✅ BOOTSTRAP: Notifications initialized');
+    print('🚀 BACKGROUND: Starting non-blocking background services...');
+    
+    // 🚀 STRATEGY: Don't await anything - let everything run in parallel
+    
+    // Service 1: Notifications (don't await)
+    _initializeNotificationsInBackground();
+    
+    // Service 2: Geofencing (don't await)  
+    _initializeGeofencingInBackground();
+    
+    // Service 3: File intent (don't await)
+    _initializeFileIntentInBackground();
+    
+    print('✅ BACKGROUND: All background services scheduled');
+  }
 
-      // Initialize app-level geofencing (moved from main)
-      await AppGeofencingController.instance.initializeApp();
-      print('✅ BOOTSTRAP: App geofencing initialized');
+  /// Initialize notifications in background
+  void _initializeNotificationsInBackground() {
+    Future.delayed(const Duration(seconds: 3), () async {
+      try {
+        await initializeNotifications();
+        print('✅ BACKGROUND: Notifications initialized');
+      } catch (e) {
+        print('⚠️ BACKGROUND: Notification error: $e');
+      }
+    });
+  }
 
-      // Initialize file intent handler (moved from main)
-      FileIntentHandler.initialize();
-      print('✅ BOOTSTRAP: File intent handler initialized');
+  /// Initialize geofencing in background  
+  void _initializeGeofencingInBackground() {
+    Future.delayed(const Duration(seconds: 5), () async {
+      try {
+        await AppGeofencingController.instance.initializeApp();
+        print('✅ BACKGROUND: App geofencing initialized');
+      } catch (e) {
+        print('⚠️ BACKGROUND: Geofencing error: $e');
+      }
+    });
+  }
 
-    } catch (e) {
-      print('⚠️ BOOTSTRAP: Error in background services: $e');
-    }
+  /// Initialize file intent in background
+  void _initializeFileIntentInBackground() {
+    Future.delayed(const Duration(seconds: 1), () async {
+      try {
+        FileIntentHandler.initialize();
+        print('✅ BACKGROUND: File intent handler initialized');
+      } catch (e) {
+        print('⚠️ BACKGROUND: File intent error: $e');
+      }
+    });
   }
 
   @override
   Widget build(BuildContext context) {
-    return Consumer<AppBootstrapService>(
-      builder: (context, bootstrap, child) {
-        // Show loading screen only if Phase 1 is not complete
-        if (!bootstrap.phase1Complete) {
-          return _buildLoadingScreen(bootstrap);
-        }
-
-        // Show main screen as soon as Phase 1 is complete
-        // Phase 2 and 3 continue in background
-        return const MainNavigationScreen();
-      },
-    );
+    // 🚀 INSTANT UI: Show MainNavigationScreen immediately!
+    // Don't wait for ANY bootstrap phases to complete
+    return const MainNavigationScreen();
+    
+    // REMOVED: All bootstrap checking and loading screens
+    // Bootstrap continues in background without blocking UI
   }
 
   /// Build loading screen with bootstrap progress (static styling)
+  /// KEPT FOR POTENTIAL FUTURE USE BUT NOT USED ANYMORE
   Widget _buildLoadingScreen(AppBootstrapService bootstrap) {
     return Scaffold(
       backgroundColor: Colors.white, // Static white background

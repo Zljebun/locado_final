@@ -42,132 +42,202 @@ class AppBootstrapService extends ChangeNotifier {
   Map<String, dynamic> get bootstrapData => _bootstrapData;
 
   /// Initialize all phases sequentially
-  Future<void> initializeApp() async {
-    print('🚀 BOOTSTRAP: Starting app initialization');
-    _updateStatus(BootstrapPhase.phase1, 'Starting Phase 1...', 0.0);
+	Future<void> initializeApp() async {
+	  final startTime = DateTime.now();
+	  print('🚀 BOOTSTRAP: Starting app initialization');
+	  _updateStatus(BootstrapPhase.phase1, 'Starting Phase 1...', 0.0);
 
-    try {
-      // Phase 1: Instant UI setup
-      await _executePhase1();
-      
-      // Phase 2: Critical data 
-      await _executePhase2();
-      
-      // Phase 3: Background features (non-blocking)
-      _executePhase3InBackground();
-      
-      _isInitialized = true;
-      print('✅ BOOTSTRAP: App initialization completed');
-      
-    } catch (e, stackTrace) {
-      print('❌ BOOTSTRAP: Initialization failed: $e');
-      print('❌ BOOTSTRAP: Stack trace: $stackTrace');
-      _errorMessage = e.toString();
-      _updateStatus(BootstrapPhase.error, 'Initialization failed', 0.0);
-    }
-  }
+	  try {
+		// Phase 1: ONLY essential UI setup - must be instant
+		await _executePhase1();
+		
+		// Phase 2: Execute in background - don't block UI
+		_executePhase2InBackground();
+		
+		// Phase 3: Background features (non-blocking)
+		_executePhase3InBackground();
+		
+		_isInitialized = true;
+		
+		final duration = DateTime.now().difference(startTime);
+		print('✅ BOOTSTRAP: App initialization completed in ${duration.inMilliseconds}ms');
+		
+	  } catch (e, stackTrace) {
+		print('❌ BOOTSTRAP: Initialization failed: $e');
+		print('❌ BOOTSTRAP: Stack trace: $stackTrace');
+		_errorMessage = e.toString();
+		_updateStatus(BootstrapPhase.error, 'Initialization failed', 0.0);
+	  }
+	}
 
   /// Phase 1: Instant UI setup (0-100ms)
   /// Only essential UI components and cached data
-  Future<void> _executePhase1() async {
-    print('📱 BOOTSTRAP PHASE 1: Starting instant UI setup');
-    _updateStatus(BootstrapPhase.phase1, 'Setting up UI...', 0.1);
+	Future<void> _executePhase1() async {
+	  final startTime = DateTime.now();
+	  print('📱 BOOTSTRAP PHASE 1: Starting instant UI setup');
+	  _updateStatus(BootstrapPhase.phase1, 'Setting up UI...', 0.1);
 
-    // Step 1: Load cached settings
-    _updateStatus(BootstrapPhase.phase1, 'Loading cached settings...', 0.2);
-    await _loadCachedSettings();
+	  // Step 1: Initialize theme data (memory only)
+	  _updateStatus(BootstrapPhase.phase1, 'Setting up theme...', 0.2);
+	  await _initializeTheme();
 
-    // Step 2: Initialize theme data
-    _updateStatus(BootstrapPhase.phase1, 'Setting up theme...', 0.3);
-    await _initializeTheme();
+	  // Step 2: Set default values (memory only)
+	  _updateStatus(BootstrapPhase.phase1, 'Setting defaults...', 0.3);
+	  _setDefaultValues();
 
-    _phase1Complete = true;
-    _updateStatus(BootstrapPhase.phase1, 'Phase 1 completed', 0.35);
-    print('✅ BOOTSTRAP PHASE 1: Completed in ${DateTime.now().millisecondsSinceEpoch}ms');
-  }
+	  _phase1Complete = true;
+	  _updateStatus(BootstrapPhase.phase1, 'Phase 1 completed', 0.35);
+	  
+	  final duration = DateTime.now().difference(startTime);
+	  print('✅ BOOTSTRAP PHASE 1: Completed in ${duration.inMilliseconds}ms');
+	}
+	
+	void _executePhase2InBackground() {
+	  print('🗺️ BOOTSTRAP PHASE 2: Starting critical data loading in background');
+	  _updateStatus(BootstrapPhase.phase2, 'Loading critical data...', 0.35);
+
+	  // Execute after UI renders
+	  Future.delayed(const Duration(milliseconds: 100), () async {
+		try {
+		  await _executePhase2();
+		} catch (e) {
+		  print('❌ BOOTSTRAP PHASE 2: Error: $e');
+		}
+	  });
+	}
 
   /// Phase 2: Critical data loading (100-500ms)
   /// Map provider, basic location data, essential permissions
-  Future<void> _executePhase2() async {
-    print('🗺️ BOOTSTRAP PHASE 2: Starting critical data loading');
-    _updateStatus(BootstrapPhase.phase2, 'Loading critical data...', 0.35);
+	Future<void> _executePhase2() async {
+	  final startTime = DateTime.now();
+	  
+	  // Step 1: Load cached settings (fast)
+	  _updateStatus(BootstrapPhase.phase2, 'Loading cached settings...', 0.4);
+	  await _loadCachedSettings();
 
-    // Step 1: Load map provider setting
-    _updateStatus(BootstrapPhase.phase2, 'Loading map provider...', 0.4);
-    await _loadMapProviderSetting();
+	  // Step 2: Load map provider setting (fast)
+	  _updateStatus(BootstrapPhase.phase2, 'Loading map provider...', 0.5);
+	  await _loadMapProviderSetting();
 
-    // Step 2: Basic location check (non-blocking)
-    _updateStatus(BootstrapPhase.phase2, 'Checking location services...', 0.5);
-    await _checkLocationServices();
+	  // Step 3: Load essential cached data (fast)
+	  _updateStatus(BootstrapPhase.phase2, 'Loading cached data...', 0.6);
+	  await _loadEssentialCachedData();
 
-    // Step 3: Load essential cached data
-    _updateStatus(BootstrapPhase.phase2, 'Loading cached data...', 0.6);
-    await _loadEssentialCachedData();
+	  // Step 4: Basic location check (background)
+	  _updateStatus(BootstrapPhase.phase2, 'Checking location services...', 0.6);
+	  _checkLocationServicesInBackground();
 
-    _phase2Complete = true;
-    _updateStatus(BootstrapPhase.phase2, 'Phase 2 completed', 0.65);
-    print('✅ BOOTSTRAP PHASE 2: Completed');
-  }
+	  _phase2Complete = true;
+	  _updateStatus(BootstrapPhase.phase2, 'Phase 2 completed', 0.65);
+	  
+	  final duration = DateTime.now().difference(startTime);
+	  print('✅ BOOTSTRAP PHASE 2: Completed in ${duration.inMilliseconds}ms');
+	}
+	
+	void _setDefaultValues() {
+	  _bootstrapData['notificationDistance'] = 100;
+	  _bootstrapData['autoFocusEnabled'] = true;
+	  _bootstrapData['useOpenStreetMap'] = true; // Default to OSM
+	  _bootstrapData['mapProvider'] = 'openStreetMap';
+	  _bootstrapData['themeReady'] = true;
+	  print('✅ BOOTSTRAP: Default values set');
+	}
+	
+	/// Check location services in background without blocking
+	void _checkLocationServicesInBackground() {
+	  Future.delayed(const Duration(milliseconds: 500), () async {
+		try {
+		  final status = await LocationService.getLocationServiceStatus();
+		  _bootstrapData['locationServiceStatus'] = status;
+		  print('✅ BOOTSTRAP: Location service status checked in background');
+		} catch (e) {
+		  print('⚠️ BOOTSTRAP: Error checking location services: $e');
+		}
+	  });
+	}
 
   /// Phase 3: Background features (500ms-2min)
   /// Geofencing, notifications, full permissions, optimizations
-  void _executePhase3InBackground() {
-    print('⚙️ BOOTSTRAP PHASE 3: Starting background initialization');
-    _updateStatus(BootstrapPhase.phase3, 'Initializing background features...', 0.65);
+	void _executePhase3InBackground() {
+	  print('⚙️ BOOTSTRAP PHASE 3: Starting background initialization');
+	  _updateStatus(BootstrapPhase.phase3, 'Initializing background features...', 0.65);
 
-    // Execute phase 3 without blocking UI
-    Timer(const Duration(milliseconds: 500), () async {
-      try {
-        await _executePhase3();
-      } catch (e) {
-        print('❌ BOOTSTRAP PHASE 3: Error: $e');
-      }
-    });
-  }
+	  // DELAY Phase 3 much longer to let UI fully render
+	  Timer(const Duration(seconds: 2), () async {
+		try {
+		  await _executePhase3();
+		} catch (e) {
+		  print('❌ BOOTSTRAP PHASE 3: Error: $e');
+		}
+	  });
+	}
 
   /// Execute Phase 3 steps
-  Future<void> _executePhase3() async {
-    // Step 1: Request essential permissions
-    _updateStatus(BootstrapPhase.phase3, 'Requesting permissions...', 0.7);
-    await _requestEssentialPermissions();
+	Future<void> _executePhase3() async {
+	  final startTime = DateTime.now();
+	  
+	  // Step 1: Request essential permissions (delay)
+	  _updateStatus(BootstrapPhase.phase3, 'Requesting permissions...', 0.7);
+	  await Future.delayed(const Duration(milliseconds: 500));
+	  await _requestEssentialPermissions();
 
-    // Step 2: Initialize location services
-    _updateStatus(BootstrapPhase.phase3, 'Setting up location services...', 0.8);
-    await _initializeLocationServices();
+	  // Step 2: Initialize location services (delay)
+	  _updateStatus(BootstrapPhase.phase3, 'Setting up location services...', 0.8);
+	  await Future.delayed(const Duration(milliseconds: 500));
+	  await _initializeLocationServices();
 
-    // Step 3: Initialize notifications  
-    _updateStatus(BootstrapPhase.phase3, 'Setting up notifications...', 0.85);
-    await _initializeNotificationServices();
+	  // Step 3: Initialize notifications (delay)
+	  _updateStatus(BootstrapPhase.phase3, 'Setting up notifications...', 0.85);
+	  await Future.delayed(const Duration(milliseconds: 500));
+	  await _initializeNotificationServices();
 
-    // Step 4: Initialize geofencing (delayed)
-    Timer(const Duration(seconds: 5), () async {
-      _updateStatus(BootstrapPhase.phase3, 'Initializing geofencing...', 0.9);
-      await _initializeGeofencingServices();
-    });
+	  // Step 4: Initialize geofencing (heavily delayed)
+	  Timer(const Duration(seconds: 10), () async {
+		_updateStatus(BootstrapPhase.phase3, 'Initializing geofencing...', 0.9);
+		await _initializeGeofencingServices();
+	  });
 
-    // Step 5: Background optimizations
-    Timer(const Duration(seconds: 10), () async {
-      _updateStatus(BootstrapPhase.phase3, 'Running optimizations...', 0.95);
-      await _performBackgroundOptimizations();
-      
-      _phase3Complete = true;
-      _updateStatus(BootstrapPhase.phase3, 'All features ready', 1.0);
-      print('✅ BOOTSTRAP PHASE 3: Completed');
-    });
-  }
+	  // Step 5: Background optimizations (heavily delayed)
+	  Timer(const Duration(seconds: 15), () async {
+		_updateStatus(BootstrapPhase.phase3, 'Running optimizations...', 0.95);
+		await _performBackgroundOptimizations();
+		
+		_phase3Complete = true;
+		_updateStatus(BootstrapPhase.phase3, 'All features ready', 1.0);
+		
+		final totalDuration = DateTime.now().difference(startTime);
+		print('✅ BOOTSTRAP PHASE 3: Completed in ${totalDuration.inSeconds}s');
+	  });
+	}
 
-  // Phase 1 Implementation
-  Future<void> _loadCachedSettings() async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      _bootstrapData['notificationDistance'] = prefs.getInt('notification_distance') ?? 100;
-      _bootstrapData['autoFocusEnabled'] = prefs.getBool('auto_focus_enabled') ?? true;
-      _bootstrapData['useOpenStreetMap'] = prefs.getBool('use_openstreetmap') ?? false;
-      print('✅ BOOTSTRAP: Cached settings loaded');
-    } catch (e) {
-      print('⚠️ BOOTSTRAP: Error loading cached settings: $e');
-    }
-  }
+	/// Load cached settings - optimized with fallback
+	Future<void> _loadCachedSettings() async {
+	  try {
+		final prefs = await SharedPreferences.getInstance();
+		
+		// Only override defaults if values exist in cache
+		final notificationDistance = prefs.getInt('notification_distance');
+		if (notificationDistance != null) {
+		  _bootstrapData['notificationDistance'] = notificationDistance;
+		}
+		
+		final autoFocusEnabled = prefs.getBool('auto_focus_enabled');
+		if (autoFocusEnabled != null) {
+		  _bootstrapData['autoFocusEnabled'] = autoFocusEnabled;
+		}
+		
+		final useOpenStreetMap = prefs.getBool('use_openstreetmap');
+		if (useOpenStreetMap != null) {
+		  _bootstrapData['useOpenStreetMap'] = useOpenStreetMap;
+		  _bootstrapData['mapProvider'] = useOpenStreetMap ? 'openStreetMap' : 'googleMaps';
+		}
+		
+		print('✅ BOOTSTRAP: Cached settings loaded');
+	  } catch (e) {
+		print('⚠️ BOOTSTRAP: Error loading cached settings (using defaults): $e');
+		// Keep default values set in _setDefaultValues()
+	  }
+	}
 
   Future<void> _initializeTheme() async {
     // Theme initialization is handled by ThemeProvider

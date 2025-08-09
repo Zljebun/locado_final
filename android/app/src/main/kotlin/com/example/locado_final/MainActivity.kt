@@ -15,7 +15,7 @@ import android.app.PendingIntent
 import android.graphics.BitmapFactory
 import android.content.Context
 import java.io.File
-// 🔋 NOVI IMPORTS ZA BATTERY OPTIMIZATION
+// Battery optimization imports
 import android.os.PowerManager
 import android.provider.Settings
 import android.net.Uri
@@ -27,29 +27,29 @@ class MainActivity: FlutterActivity() {
         private const val CHANNEL = "com.example.locado_final/geofence"
         private const val EVENT_CHANNEL = "com.example.locado_final/geofence_events"
 
-        // ✅ OPTIONAL EVENT SINK - SAMO ZA FLUTTER UI UPDATES
-        // Native geofencing NE ZAVISI od ovoga
+        // Optional event sink - only for Flutter UI updates
+        // Native geofencing does NOT depend on this
         var eventSink: EventChannel.EventSink? = null
             private set
     }
 
     private lateinit var geofenceManager: GeofenceManager
     
-    // ✅ NOVO: FileIntentPlugin instance
+    // FileIntentPlugin instance
     private var fileIntentPlugin: FileIntentPlugin? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
 
-        // 🚀 INITIALIZE HIBRIDNI SISTEM
+        // Initialize hybrid system
         initializeHybridSystem()
         
-        // ✅ NOVO: Setup FileIntentPlugin
+        // Setup FileIntentPlugin
         fileIntentPlugin = FileIntentPlugin(this)
         fileIntentPlugin?.setupChannel(flutterEngine)
         android.util.Log.d(TAG, "✅ FileIntentPlugin configured")
 
-        // ✅ SETUP EVENT CHANNEL ZA FLUTTER UI UPDATES (OPTIONAL)
+        // Setup event channel for Flutter UI updates (optional)
         EventChannel(flutterEngine.dartExecutor.binaryMessenger, EVENT_CHANNEL)
             .setStreamHandler(object : EventChannel.StreamHandler {
                 override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
@@ -116,12 +116,12 @@ class MainActivity: FlutterActivity() {
                         val title = call.argument<String>("title") ?: ""
                         val description = call.argument<String>("description") ?: ""
 
-                        Log.d(TAG, "Adding geofence: $id at ($latitude, $longitude)")
+                        Log.d(TAG, "Adding single geofence: $id at ($latitude, $longitude)")
 
                         val task = geofenceManager.addGeofence(id, latitude, longitude, radius, title, description)
 
                         if (task != null) {
-                            // 🚀 HIBRIDNI SISTEM: Posle uspešnog dodavanja, pokreni service ako treba
+                            // Start service after successful addition
                             task.addOnSuccessListener {
                                 ensureServiceRunning()
                                 Log.d(TAG, "✅ Geofence added - hybrid system checked")
@@ -135,6 +135,69 @@ class MainActivity: FlutterActivity() {
                     } catch (e: Exception) {
                         Log.e(TAG, "Failed to add geofence", e)
                         result.error("GEOFENCE_ERROR", "Failed to add geofence: ${e.message}", null)
+                    }
+                }
+
+                // 🚀 NEW: Batch geofence processing WITH LAZY OPTIMIZATION
+                "addGeofencesBatch" -> {
+                    val geofences = call.argument<List<Map<String, Any>>>("geofences")
+                    if (geofences != null) {
+                        try {
+                            Log.d(TAG, "🚀 BATCH: Adding ${geofences.size} geofences via optimized batch processing")
+                            
+                            // Convert to GeofenceData objects
+                            val geofenceDataList = geofences.map { geofenceMap ->
+                                GeofenceManager.GeofenceData(
+                                    id = geofenceMap["id"] as String,
+                                    latitude = geofenceMap["latitude"] as Double,
+                                    longitude = geofenceMap["longitude"] as Double,
+                                    radius = (geofenceMap["radius"] as Double).toFloat(),
+                                    title = geofenceMap["title"] as String? ?: "Task Location",
+                                    description = geofenceMap["description"] as String? ?: "Location monitoring"
+                                )
+                            }
+                            
+                            // 🚀 NEW: Use lazy optimization instead of traditional batch
+                            val task = geofenceManager.addGeofencesBatchWithLazyOptimization(geofenceDataList)
+                            
+                            if (task != null) {
+                                Log.d(TAG, "✅ BATCH: ${geofences.size} geofences added successfully with optimization")
+                                result.success("${geofences.size} geofences added via optimized batch processing")
+                            } else {
+                                result.error("PERMISSION_ERROR", "Location permissions not granted", null)
+                            }
+                        } catch (e: Exception) {
+                            Log.e(TAG, "❌ LAZY: Flutter batch call failed: $e")
+                            result.error("BATCH_ERROR", "Failed to add geofences: ${e.message}", null)
+                        }
+                    } else {
+                        result.error("INVALID_ARGUMENTS", "Geofences list is null", null)
+                    }
+                }
+
+                // 🚀 NEW: Batch geofence removal
+                "removeGeofencesBatch" -> {
+                    try {
+                        val geofenceIds = call.argument<List<String>>("ids") 
+                            ?: throw IllegalArgumentException("Missing geofence IDs")
+
+                        Log.d(TAG, "🗑️ BATCH: Removing ${geofenceIds.size} geofences")
+
+                        // Remove each geofence (simplified batch removal)
+                        var removedCount = 0
+                        for (id in geofenceIds) {
+                            val removeTask = geofenceManager.removeGeofence(id)
+                            if (removeTask != null) {
+                                removedCount++
+                            }
+                        }
+
+                        Log.d(TAG, "✅ BATCH: Removed $removedCount geofences")
+                        result.success("$removedCount geofences removed via batch processing")
+
+                    } catch (e: Exception) {
+                        Log.e(TAG, "❌ BATCH: Exception during batch removal", e)
+                        result.error("BATCH_REMOVE_ERROR", "Batch removal failed: ${e.message}", null)
                     }
                 }
 
@@ -186,7 +249,7 @@ class MainActivity: FlutterActivity() {
                     }
                 }
 
-                // 🚀 HIBRIDNI SISTEM METHOD CALLS
+                // Hybrid system method calls
                 "getHybridSystemStatus" -> {
                     try {
                         val status = getHybridSystemStatus()
@@ -199,7 +262,7 @@ class MainActivity: FlutterActivity() {
 
                 "forceManualBackup" -> {
                     try {
-                        // Force aktivacija manual backup-a za testing
+                        // Force activation of manual backup for testing
                         Log.d(TAG, "🔄 Force activating manual backup for testing")
                         result.success("Manual backup force activation attempted")
                     } catch (e: Exception) {
@@ -208,7 +271,7 @@ class MainActivity: FlutterActivity() {
                     }
                 }
 
-                // 🔋 NOVI BATTERY OPTIMIZATION METHOD CALLS
+                // Battery optimization method calls
                 "checkBatteryOptimization" -> {
                     try {
                         val batteryStatus = getBatteryOptimizationStatus()
@@ -257,7 +320,7 @@ class MainActivity: FlutterActivity() {
                 }
             }
 
-        // ✅ METHOD CHANNEL ZA LOCK SCREEN ALERTS (ZADRŽANO ZA FLUTTER CALLS)
+        // Method channel for lock screen alerts (kept for Flutter calls)
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "locado.lockscreen/channel")
             .setMethodCallHandler { call, result ->
                 Log.d(TAG, "📞 Lock screen method call received from Flutter: ${call.method}")
@@ -299,7 +362,7 @@ class MainActivity: FlutterActivity() {
                 }
             }
 
-        // ✅ DEBUG METHOD CHANNEL ZA DEBUG PANEL
+        // Debug method channel for debug panel
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "com.example.locado_final/debug")
             .setMethodCallHandler { call, result ->
                 Log.d(TAG, "🐛 Debug method call received: ${call.method}")
@@ -314,10 +377,10 @@ class MainActivity: FlutterActivity() {
                                 0
                             }
 
-                            // 🚀 HIBRIDNI SISTEM DEBUG INFO
+                            // Hybrid system debug info
                             val hybridStatus = getHybridSystemStatus()
 
-                            // 🔋 DODAJ BATTERY OPTIMIZATION STATUS U DEBUG
+                            // Add battery optimization status to debug
                             val batteryStatus = try {
                                 getBatteryOptimizationStatus()
                             } catch (e: Exception) {
@@ -334,9 +397,9 @@ class MainActivity: FlutterActivity() {
                                 "logFileSize" to getLogFileSize(),
                                 "logFilePath" to DebugLogManager.getLogFilePath(this),
                                 "recentLogs" to getRecentLogs(),
-                                // 🚀 HIBRIDNI SISTEM STATUS
+                                // Hybrid system status
                                 "hybridSystem" to hybridStatus,
-                                // 🔋 BATTERY OPTIMIZATION STATUS
+                                // Battery optimization status
                                 "batteryOptimization" to batteryStatus
                             )
                             result.success(debugStatus)
@@ -411,7 +474,7 @@ class MainActivity: FlutterActivity() {
                             DebugLogManager.logCustomEvent(this, "DEBUG_SIMULATION", "Simulated geofence event: $eventType")
                             Log.d(TAG, "🧪 Simulating geofence event: $eventType")
 
-                            // 🚀 SIMULIRAJ GEOFENCE EVENT ZA HIBRIDNI SISTEM
+                            // Simulate geofence event for hybrid system
                             geofenceManager.onGeofenceEventReceived()
 
                             val simulationResult = mapOf(
@@ -516,7 +579,7 @@ class MainActivity: FlutterActivity() {
                 }
             }
 
-        // 🎯 METHOD CHANNEL ZA TASK DETAIL NAVIGATION
+        // Method channel for task detail navigation
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "com.example.locado_final/task_detail")
             .setMethodCallHandler { call, result ->
                 Log.d(TAG, "📋 Task detail method call received: ${call.method}")
@@ -581,7 +644,7 @@ class MainActivity: FlutterActivity() {
                 }
             }
 
-        // 🆕 METHOD CHANNEL ZA DELETE TASK OPERATIONS
+        // Method channel for delete task operations
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "com.example.locado_final/delete_task")
             .setMethodCallHandler { call, result ->
                 Log.d(TAG, "🗑️ Delete task method call received: ${call.method}")
@@ -641,7 +704,7 @@ class MainActivity: FlutterActivity() {
                 }
             }
 
-        // ✅ NOVI METHOD CHANNEL ZA SETTINGS POSTAVKE
+        // Method channel for settings configuration
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "com.example.locado_final/settings")
             .setMethodCallHandler { call, result ->
                 Log.d(TAG, "⚙️ Settings method call received: ${call.method}")
@@ -662,7 +725,7 @@ class MainActivity: FlutterActivity() {
                             Log.d(TAG, "  - Wake screen: $wakeScreenEnabled")
                             Log.d(TAG, "  - Priority: $notificationPriority")
 
-                            // ✅ SAČUVAJ POSTAVKE U SHARED PREFERENCES
+                            // Save settings to shared preferences
                             val prefs = getSharedPreferences("locado_settings", Context.MODE_PRIVATE)
                             prefs.edit().apply {
                                 putFloat("geofence_radius", geofenceRadius.toFloat())
@@ -672,9 +735,6 @@ class MainActivity: FlutterActivity() {
                                 putString("notification_priority", notificationPriority)
                                 apply()
                             }
-
-                            // ✅ OBAVESTI GEOFENCE MANAGER O NOVOM RADIUSU
-                            // (ovo će se koristiti u budućim geofence operacijama)
 
                             Log.d(TAG, "✅ Settings updated successfully")
                             result.success("Settings updated successfully")
@@ -712,27 +772,27 @@ class MainActivity: FlutterActivity() {
                     }
                 }
             }
-						
-			MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "com.example.locado_final/app_detection")
-				.setMethodCallHandler { call, result ->
-					when (call.method) {
-						"getInstalledApps" -> {
-							try {
-								val packageManager = packageManager
-								val installedApps = packageManager.getInstalledPackages(0)
-								val appPackages = installedApps.map { it.packageName }
-								result.success(appPackages)
-							} catch (e: Exception) {
-								result.error("APP_DETECTION_ERROR", e.message, null)
-							}
-						}
-						else -> result.notImplemented()
-					}
-				}
+
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "com.example.locado_final/app_detection")
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "getInstalledApps" -> {
+                        try {
+                            val packageManager = packageManager
+                            val installedApps = packageManager.getInstalledPackages(0)
+                            val appPackages = installedApps.map { it.packageName }
+                            result.success(appPackages)
+                        } catch (e: Exception) {
+                            result.error("APP_DETECTION_ERROR", e.message, null)
+                        }
+                    }
+                    else -> result.notImplemented()
+                }
+            }
     }
 
     /**
-     * 🚀 INICIJALIZUJ HIBRIDNI SISTEM
+     * Initialize hybrid system
      */
     private fun initializeHybridSystem() {
         try {
@@ -745,7 +805,7 @@ class MainActivity: FlutterActivity() {
     }
 
     /**
-     * 🚀 OSIGURAJ DA SERVICE RADI
+     * Ensure service is running
      */
     private fun ensureServiceRunning() {
         try {
@@ -762,7 +822,7 @@ class MainActivity: FlutterActivity() {
     }
 
     /**
-     * 🚀 DOBIJ HIBRIDNI SISTEM STATUS
+     * Get hybrid system status
      */
     private fun getHybridSystemStatus(): Map<String, Any> {
         return try {
@@ -796,7 +856,7 @@ class MainActivity: FlutterActivity() {
     }
 
     /**
-     * 🔋 PROVERI BATTERY OPTIMIZATION STATUS
+     * Check battery optimization status
      */
     private fun getBatteryOptimizationStatus(): Map<String, Any> {
         return try {
@@ -822,7 +882,7 @@ class MainActivity: FlutterActivity() {
     }
 
     /**
-     * 🔋 ZATRAŽI BATTERY OPTIMIZATION WHITELIST
+     * Request battery optimization whitelist
      */
     private fun requestBatteryOptimizationWhitelist(): Boolean {
         return try {
@@ -861,7 +921,7 @@ class MainActivity: FlutterActivity() {
         // Check if launched with task detail intent
         checkForTaskDetailIntent()
         
-        // ✅ NOVO: Handle initial intent (kada se app otvori preko .locado fajla)
+        // Handle initial intent (when app opens via .locado file)
         handleInitialIntent(intent)
     }
 
@@ -872,12 +932,12 @@ class MainActivity: FlutterActivity() {
         // Check for task detail intent on new intent
         checkForTaskDetailIntent()
         
-        // ✅ NOVO: Handle new intent (kada app već radi i prima novi .locado fajl)
+        // Handle new intent (when app is already running and receives new .locado file)
         android.util.Log.d(TAG, "🔗 Received new intent: ${intent.action}")
         handleInitialIntent(intent)
     }
     
-    // ✅ NOVO: Private metoda za handling .locado file intents
+    // Private method for handling .locado file intents
     private fun handleInitialIntent(intent: Intent?) {
         if (intent != null) {
             android.util.Log.d(TAG, "🔍 Checking intent: action=${intent.action}, data=${intent.data}")
@@ -924,8 +984,8 @@ class MainActivity: FlutterActivity() {
         }
     }
 
-    // ✅ HELPER METODA - Pošalje event Flutter-u AKO je povezan (optional)
-    // Poziva se iz GeofenceBroadcastReceiver
+    // Helper method - Send event to Flutter IF connected (optional)
+    // Called from GeofenceBroadcastReceiver
     fun sendOptionalFlutterEvent(eventData: Map<String, Any>) {
         try {
             eventSink?.success(eventData)
@@ -996,7 +1056,13 @@ class MainActivity: FlutterActivity() {
         )
     }
 
-    private fun handleGeofenceTask(task: Task<Void>, result: MethodChannel.Result, successMessage: String) {
+    private fun handleGeofenceTask(task: Task<Void>?, result: MethodChannel.Result, successMessage: String) {
+        if (task == null) {
+            Log.w(TAG, "Geofence task is null - operation may not be supported")
+            result.success("Operation completed (no task returned)")
+            return
+        }
+        
         task.addOnSuccessListener {
             Log.d(TAG, successMessage)
             result.success(successMessage)
@@ -1007,7 +1073,7 @@ class MainActivity: FlutterActivity() {
     }
 
     /**
-     * 🐛 DEBUG HELPER METODE
+     * Debug helper methods
      */
     private fun getLogFileSize(): String {
         return try {

@@ -32,6 +32,7 @@ import 'package:locado_final/screens/task_input_screen.dart' show TaskInputScree
 // REMOVED: Provider and ThemeProvider - no more dark mode support
 import 'ai_location_search_screen.dart';
 import '../widgets/osm_map_widget.dart';
+import '../services/task_location_cache.dart';
 
 // REMOVED: MapProvider enum - OSM only now
 
@@ -125,6 +126,8 @@ class _HomeMapScreenState extends State<HomeMapScreen>
   Future<void> _startSimpleInitialization() async {
     try {
       print('🚀 OSM-ONLY: Starting simple initialization...');
+	  
+	  await Future.delayed(Duration(milliseconds: 200));
       
       // Step 1: Load basic data quickly
       await _loadBasicData();
@@ -152,28 +155,89 @@ class _HomeMapScreenState extends State<HomeMapScreen>
     }
   }
 
-  Future<void> _loadBasicData() async {
-    try {
-      // Load data in parallel
-      final results = await Future.wait([
-        DatabaseHelper.instance.getAllLocations(),
-        DatabaseHelper.instance.getAllTaskLocations(),
-      ]);
-      
-      final locations = results[0] as List<Location>;
-      final taskLocations = results[1] as List<TaskLocation>;
-      
-      _savedLocations = taskLocations;
-      
-      // Create basic OSM markers (no custom icons for speed)
-      await _createBasicOSMMarkers(locations, taskLocations);
-      
-      print('✅ OSM-ONLY: Loaded ${taskLocations.length} tasks, ${locations.length} locations');
-      
-    } catch (e) {
-      print('❌ OSM-ONLY: Error loading basic data: $e');
-    }
-  }
+	Future<void> _loadBasicData() async {
+	  try {
+		await Future.delayed(Duration(milliseconds: 50));
+		
+		// ✅ OPTIMIZED: Load locations from database (these are usually few)
+		// and tasks from cache first, then refresh from database
+		final locationsFuture = DatabaseHelper.instance.getAllLocations();
+		
+		// ✅ INSTANT: Load tasks from cache first
+		print('🚀 MAP CACHE: Loading tasks from cache...');
+		final cachedTasks = await TaskLocationCache.instance.getInstantTasks();
+		
+		// Load locations (usually small number, fast)
+		final locations = await locationsFuture;
+		
+		if (cachedTasks.isNotEmpty) {
+		  // ✅ INSTANT: Use cached tasks for immediate UI
+		  _savedLocations = cachedTasks;
+		  
+		  await Future.delayed(Duration(milliseconds: 100));
+		  
+		  // Create markers with cached data
+		  await _createBasicOSMMarkers(locations, cachedTasks);
+		  
+		  print('✅ MAP CACHE: Used cached data (${cachedTasks.length} tasks, ${locations.length} locations)');
+		} else {
+		  print('ℹ️ MAP CACHE: No cache available, loading from database...');
+		  
+		  // Fallback: Load from database if no cache
+		  final taskLocations = await DatabaseHelper.instance.getAllTaskLocations();
+		  _savedLocations = taskLocations;
+		  
+		  await Future.delayed(Duration(milliseconds: 100));
+		  await _createBasicOSMMarkers(locations, taskLocations);
+		  
+		  // Update cache with fresh data
+		  await TaskLocationCache.instance.updateCache(taskLocations);
+		  
+		  print('✅ MAP CACHE: Loaded from database (${taskLocations.length} tasks, ${locations.length} locations)');
+		}
+		
+		// ✅ BACKGROUND: Refresh from database to ensure data is current
+		Future.delayed(const Duration(milliseconds: 200), () async {
+		  try {
+			print('🔄 MAP CACHE: Refreshing from database in background...');
+			final freshTasks = await DatabaseHelper.instance.getAllTaskLocations();
+			
+			// Check if data changed
+			bool dataChanged = false;
+			if (_savedLocations.length != freshTasks.length) {
+			  dataChanged = true;
+			} else {
+			  // Check if any task IDs are different
+			  final cachedIds = _savedLocations.map((t) => t.id).toSet();
+			  final freshIds = freshTasks.map((t) => t.id).toSet();
+			  dataChanged = !cachedIds.containsAll(freshIds) || !freshIds.containsAll(cachedIds);
+			}
+			
+			if (dataChanged && mounted) {
+			  _savedLocations = freshTasks;
+			  await _createBasicOSMMarkers(locations, freshTasks);
+			  
+			  // Update cache
+			  await TaskLocationCache.instance.updateCache(freshTasks);
+			  
+			  setState(() {
+				// Trigger UI update with fresh data
+			  });
+			  
+			  print('🔄 MAP CACHE: Updated with fresh data (${freshTasks.length} tasks)');
+			} else {
+			  print('✅ MAP CACHE: Cache is up to date');
+			}
+			
+		  } catch (e) {
+			print('❌ MAP CACHE: Error refreshing from database: $e');
+		  }
+		});
+		
+	  } catch (e) {
+		print('❌ MAP CACHE: Error in _loadBasicData: $e');
+	  }
+	}
 
   // Create basic OSM markers without complex rendering
   Future<void> _createBasicOSMMarkers(List<Location> locations, List<TaskLocation> taskLocations) async {
@@ -204,10 +268,15 @@ class _HomeMapScreenState extends State<HomeMapScreen>
           onTap: () => _handleTaskTap(task),
         ),
       );
+		  if (taskLocations.indexOf(task) % 5 == 0) {
+		   await Future.delayed(Duration(milliseconds: 10));
+		  }
     }
 
     // Add existing search markers
     newMarkers.addAll(_osmSearchMarkers);
+	
+	await Future.delayed(Duration(milliseconds: 50));
 
     // Don't call setState here - just set the variable
     _osmMarkers = newMarkers;
@@ -1093,20 +1162,20 @@ class _HomeMapScreenState extends State<HomeMapScreen>
       },
       myLocationEnabled: true,
       myLocationButtonEnabled: true,
-      onLongPress: (ll.LatLng position) async {
-        // Convert OSM LatLng to Google Maps LatLng for TaskInputScreen compatibility
-        final gmapsLocation = gmaps.LatLng(position.latitude, position.longitude);
-        
-        final result = await Navigator.push(
-          context,
-          MaterialPageRoute(builder: (ctx) => TaskInputScreen(
-            location: gmapsLocation,
-          )),
-        );
-        if (result == true) {
-          await _loadSavedLocationsAndFocusNew();
-        }
-      },
+		onLongPress: (ll.LatLng position) async {
+		  // Convert OSM LatLng to Google Maps LatLng for TaskInputScreen compatibility
+		  final gmapsLocation = gmaps.LatLng(position.latitude, position.longitude);
+		  
+		  final result = await Navigator.push(
+			context,
+			MaterialPageRoute(builder: (ctx) => TaskInputScreen(
+			  location: gmapsLocation,
+			)),
+		  );
+		  if (result == true) {
+			await _loadSavedLocationsAndFocusNew(); // Will use cache first
+		  }
+		},
       onTap: (ll.LatLng location) {
         // Clear search results when tapping on map
         if (_osmSearchMarkers.isNotEmpty) {
@@ -1130,53 +1199,61 @@ class _HomeMapScreenState extends State<HomeMapScreen>
 
   // REMAINING METHODS - simplified for OSM only
   
-  Future<void> _loadSavedLocationsAndFocusNew() async {
-    print('🔄 DEBUG: _loadSavedLocationsAndFocusNew() called');
-    try {
-      List<Location> locations = await DatabaseHelper.instance.getAllLocations();
-      List<TaskLocation> taskLocations = await DatabaseHelper.instance.getAllTaskLocations();
-      
-      print('🔄 DEBUG: Loaded ${taskLocations.length} task locations');
+	Future<void> _loadSavedLocationsAndFocusNew() async {
+	  print('🔄 MAP CACHE: _loadSavedLocationsAndFocusNew() called');
+	  try {
+		// ✅ OPTIMIZED: Load locations and use cache for tasks
+		final locationsFuture = DatabaseHelper.instance.getAllLocations();
+		final cachedTasks = await TaskLocationCache.instance.getInstantTasks();
+		final locations = await locationsFuture;
+		
+		// Try to get fresh tasks to find new ones
+		final freshTasks = await DatabaseHelper.instance.getAllTaskLocations();
+		
+		print('🔄 MAP CACHE: Loaded ${freshTasks.length} task locations');
 
-      // Find new task (last in list)
-      TaskLocation? newTask;
-      if (taskLocations.isNotEmpty) {
-        if (_savedLocations.length < taskLocations.length) {
-          newTask = taskLocations.last;
-          _lastAddedTask = newTask;
-          print('🔄 DEBUG: Found new task: ${newTask.title}');
-        }
-      }
+		// Find new task (last in list)
+		TaskLocation? newTask;
+		if (freshTasks.isNotEmpty) {
+		  if (_savedLocations.length < freshTasks.length) {
+			newTask = freshTasks.last;
+			_lastAddedTask = newTask;
+			print('🔄 MAP CACHE: Found new task: ${newTask.title}');
+		  }
+		}
 
-      _savedLocations = taskLocations;
+		_savedLocations = freshTasks;
 
-      // Create OSM markers
-      await _createOSMMarkersWithCustomStyling(locations, taskLocations);
-      print('🔄 DEBUG: Created OSM markers');
+		// ✅ CACHE SYNC: Update cache with fresh data (including new task)
+		await TaskLocationCache.instance.updateCache(freshTasks);
 
-      setState(() {
-        _isLoading = false;
-      });
-      
-      print('🔄 DEBUG: setState() called');
+		// Create OSM markers
+		await _createOSMMarkersWithCustomStyling(locations, freshTasks);
+		print('🔄 MAP CACHE: Created OSM markers');
 
-      // FOCUS ON NEW LOCATION
-      if (newTask != null) {
-        print('🔄 DEBUG: Focusing on new task: ${newTask.title}');
-        await _focusOnNewTask(newTask);
-      }
+		setState(() {
+		  _isLoading = false;
+		});
+		
+		print('🔄 MAP CACHE: setState() called');
 
-      // Geofencing sync
-      if (isGeofencingEnabled && _savedLocations.isNotEmpty) {
-        await syncTaskLocationsFromScreen(_savedLocations);
-      }
-    } catch (e) {
-      print('❌ DEBUG: Error in _loadSavedLocationsAndFocusNew: $e');
-      setState(() {
-        _isLoading = false;
-      });
-    }
-  }
+		// FOCUS ON NEW LOCATION
+		if (newTask != null) {
+		  print('🔄 MAP CACHE: Focusing on new task: ${newTask.title}');
+		  await _focusOnNewTask(newTask);
+		}
+
+		// Geofencing sync
+		if (isGeofencingEnabled && _savedLocations.isNotEmpty) {
+		  await syncTaskLocationsFromScreen(_savedLocations);
+		}
+	  } catch (e) {
+		print('❌ MAP CACHE: Error in _loadSavedLocationsAndFocusNew: $e');
+		setState(() {
+		  _isLoading = false;
+		});
+	  }
+	}
 
   // Create OSM markers with better styling
   Future<void> _createOSMMarkersWithCustomStyling(List<Location> locations, List<TaskLocation> taskLocations) async {
@@ -1352,29 +1429,77 @@ class _HomeMapScreenState extends State<HomeMapScreen>
   }
 
   // OSM: Load saved locations with refresh
-  Future<void> _loadSavedLocationsWithRefresh() async {
-    try {
-      List<Location> locations = await DatabaseHelper.instance.getAllLocations();
-      List<TaskLocation> taskLocations = await DatabaseHelper.instance.getAllTaskLocations();
-      _savedLocations = taskLocations;
+	Future<void> _loadSavedLocationsWithRefresh() async {
+	  try {
+		print('🔄 MAP CACHE: _loadSavedLocationsWithRefresh() called');
+		
+		// ✅ OPTIMIZED: Load locations and use cache for tasks first
+		final locationsFuture = DatabaseHelper.instance.getAllLocations();
+		
+		// Try cache first for instant response
+		final cachedTasks = await TaskLocationCache.instance.getInstantTasks();
+		final locations = await locationsFuture;
+		
+		if (cachedTasks.isNotEmpty) {
+		  // Use cached data for immediate UI update
+		  _savedLocations = cachedTasks;
+		  await _createOSMMarkersWithCustomStyling(locations, cachedTasks);
+		  
+		  setState(() {
+			_isLoading = false;
+		  });
+		  
+		  print('✅ MAP CACHE: Updated UI with cached data (${cachedTasks.length} tasks)');
+		}
+		
+		// ✅ BACKGROUND: Refresh from database
+		Future.delayed(const Duration(milliseconds: 100), () async {
+		  try {
+			final freshTasks = await DatabaseHelper.instance.getAllTaskLocations();
+			
+			// Check if data changed
+			bool dataChanged = false;
+			if (_savedLocations.length != freshTasks.length) {
+			  dataChanged = true;
+			} else {
+			  final cachedIds = _savedLocations.map((t) => t.id).toSet();
+			  final freshIds = freshTasks.map((t) => t.id).toSet();
+			  dataChanged = !cachedIds.containsAll(freshIds) || !freshIds.containsAll(cachedIds);
+			}
+			
+			if (dataChanged && mounted) {
+			  _savedLocations = freshTasks;
+			  await _createOSMMarkersWithCustomStyling(locations, freshTasks);
+			  
+			  // Update cache
+			  await TaskLocationCache.instance.updateCache(freshTasks);
+			  
+			  setState(() {
+				_isLoading = false;
+			  });
+			  
+			  print('🔄 MAP CACHE: Updated with fresh data (${freshTasks.length} tasks)');
+			} else {
+			  print('✅ MAP CACHE: Cache is up to date');
+			}
+			
+			// GEOFENCING AUTO-SYNC
+			if (isGeofencingEnabled && _savedLocations.isNotEmpty) {
+			  await syncTaskLocationsFromScreen(_savedLocations);
+			}
+			
+		  } catch (e) {
+			print('❌ MAP CACHE: Error refreshing: $e');
+		  }
+		});
 
-      await _createOSMMarkersWithCustomStyling(locations, taskLocations);
-
-      setState(() {
-        _isLoading = false;
-      });
-
-      // GEOFENCING AUTO-SYNC
-      if (isGeofencingEnabled && _savedLocations.isNotEmpty) {
-        await syncTaskLocationsFromScreen(_savedLocations);
-      }
-
-    } catch (e) {
-      setState(() {
-        _isLoading = false;
-      });
-    }
-  }
+	  } catch (e) {
+		print('❌ MAP CACHE: Error in _loadSavedLocationsWithRefresh: $e');
+		setState(() {
+		  _isLoading = false;
+		});
+	  }
+	}
 
   // OSM: Focus on updated task
   Future<void> _focusOnUpdatedTask(int taskId) async {
@@ -1927,35 +2052,35 @@ class _HomeMapScreenState extends State<HomeMapScreen>
 
       print('🔍 OSM MARKER $i: Creating marker for "$name" at $lat,$lng (${distanceText})');
 
-      searchMarkers.add(
-        OSMMarker(
-          markerId: 'search_${place['osm_id']}',
-          position: ll.LatLng(lat, lng),
-          title: '$name ($distanceText)',
-          child: _createDistanceMarker(distance),
-          onTap: () async {
-            print('🔍 OSM MARKER TAP: ${name}');
-            setState(() {
-              _osmSearchMarkers.clear();
-            });
-            await _updateMapWithSearchResults();
+		searchMarkers.add(
+		  OSMMarker(
+			markerId: 'search_${place['osm_id']}',
+			position: ll.LatLng(lat, lng),
+			title: '$name ($distanceText)',
+			child: _createDistanceMarker(distance),
+			onTap: () async {
+			  print('🔍 OSM MARKER TAP: ${name}');
+			  setState(() {
+				_osmSearchMarkers.clear();
+			  });
+			  await _updateMapWithSearchResults();
 
-            final result = await Navigator.push(
-              context,
-              MaterialPageRoute(
-                builder: (ctx) => TaskInputScreen(
-                  location: gmaps.LatLng(lat, lng), // Convert to Google Maps LatLng
-                  locationName: name,
-                ),
-              ),
-            );
+			  final result = await Navigator.push(
+				context,
+				MaterialPageRoute(
+				  builder: (ctx) => TaskInputScreen(
+					location: gmaps.LatLng(lat, lng), // Convert to Google Maps LatLng
+					locationName: name,
+				  ),
+				),
+			  );
 
-            if (result == true) {
-              await _loadSavedLocationsAndFocusNew();
-            }
-          },
-        ),
-      );
+			  if (result == true) {
+				await _loadSavedLocationsAndFocusNew(); // Will use cache first
+			  }
+			},
+		  ),
+		);
     }
 
     print('🔍 OSM SEARCH DEBUG: Created ${searchMarkers.length} search markers');

@@ -285,6 +285,17 @@ class LocadoForegroundService : Service(), GeofenceManager.ManualBackupListener,
             }
         }
     }
+	
+    override fun onBatchProcessingProgress(processed: Int, total: Int) {
+        Log.d(TAG, "📊 Batch processing progress: $processed/$total")
+        
+        // Opciono - update notification sa progress
+        val progressPercent = if (total > 0) (processed * 100) / total else 0
+        
+        if (processed == total) {
+            Log.d(TAG, "✅ Batch processing completed!")
+        }
+    }
 
     /**
      * 🚀 ULTRA-FAST: Update location tracking with ultra-fast adaptive intervals
