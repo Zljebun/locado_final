@@ -8,7 +8,6 @@ import 'package:locado_final/screens/task_detail_screen.dart';
 import 'package:locado_final/screens/delete_task_confirmation_screen.dart';
 import 'package:locado_final/screens/calendar_screen.dart';
 import 'package:provider/provider.dart';
-import '../theme/theme_provider.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'dart:io';
 import 'dart:convert';
@@ -1300,36 +1299,19 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
         padding: const EdgeInsets.all(16),
         children: [
           // Theme toggle
-          Consumer<ThemeProvider>(
-            builder: (context, themeProvider, child) {
-              return _buildMoreOption(
-                icon: themeProvider.themeIcon,
-                title: 'Theme',
-                subtitle: themeProvider.currentThemeDescription,
-                onTap: () async {
-                  await themeProvider.toggleTheme();
-
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Row(
-                        children: [
-                          Icon(
-                            themeProvider.isDarkMode ? Icons.dark_mode : Icons.light_mode,
-                            color: Colors.white,
-                            size: 20,
-                          ),
-                          const SizedBox(width: 8),
-                          Text('${themeProvider.currentThemeDescription} activated!'),
-                        ],
-                      ),
-                      backgroundColor: Colors.green,
-                      duration: const Duration(seconds: 2),
-                    ),
-                  );
-                },
-              );
-            },
-          ),
+			_buildMoreOption(
+			  icon: Icons.palette,
+			  title: 'Theme',
+			  subtitle: 'Light theme (fixed)',
+			  onTap: () {
+				ScaffoldMessenger.of(context).showSnackBar(
+				  const SnackBar(
+					content: Text('Theme is set to light mode only'),
+					backgroundColor: Colors.blue,
+				  ),
+				);
+			  },
+			),
 
           const SizedBox(height: 8),
 

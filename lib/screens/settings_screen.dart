@@ -4,9 +4,6 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'dart:typed_data';
 import '../services/locado_background_service.dart';
 import 'package:flutter/services.dart';
-import 'package:provider/provider.dart';
-import '../theme/theme_provider.dart';
-import '../theme/app_theme.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({Key? key}) : super(key: key);
@@ -518,11 +515,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ),
                     const SizedBox(height: 12),
 
-                    Consumer<ThemeProvider>(
-                      builder: (context, themeProvider, child) {
-                        return _buildThemeToggleRow(themeProvider);
-                      },
-                    ),
+                    _buildStaticThemeRow(),
 
                     const SizedBox(height: 24),
 
@@ -665,7 +658,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         prefixIcon: const Icon(Icons.location_on),
                         suffixText: 'm',
                         filled: true,
-                        fillColor: AppTheme.getInputFillColor(context),
+                        fillColor: Colors.grey.shade50,
                       ),
                     ),
 
@@ -752,105 +745,62 @@ class _SettingsScreenState extends State<SettingsScreen> {
       ),
     );
   }
+  
+	Widget _buildStaticThemeRow() {
+	  return Container(
+		padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
+		decoration: BoxDecoration(
+		  color: Theme.of(context).cardColor,
+		  borderRadius: BorderRadius.circular(12),
+		  border: Border.all(color: Colors.grey.shade300),
+		),
+		child: Row(
+		  children: [
+			Container(
+			  padding: const EdgeInsets.all(8),
+			  decoration: BoxDecoration(
+				color: Theme.of(context).primaryColor.withOpacity(0.1),
+				borderRadius: BorderRadius.circular(8),
+			  ),
+			  child: Icon(
+				Icons.light_mode,
+				color: Theme.of(context).primaryColor,
+				size: 24,
+			  ),
+			),
+			const SizedBox(width: 16),
+			Expanded(
+			  child: Column(
+				crossAxisAlignment: CrossAxisAlignment.start,
+				children: [
+				  const Text(
+					'Theme',
+					style: TextStyle(
+					  fontWeight: FontWeight.w600,
+					  fontSize: 16,
+					),
+				  ),
+				  const SizedBox(height: 2),
+				  Text(
+					'Light mode (fixed)',
+					style: TextStyle(
+					  color: Theme.of(context).textTheme.bodySmall?.color,
+					  fontSize: 13,
+					),
+				  ),
+				],
+			  ),
+			),
+			Switch(
+			  value: false, // Uvek false jer je light mode
+			  onChanged: null, // Disabled
+			  activeColor: Theme.of(context).primaryColor,
+			),
+		  ],
+		),
+	  );
+	}
 
-  // 🎨 NEW METHOD: Build theme toggle row
-  Widget _buildThemeToggleRow(ThemeProvider themeProvider) {
-    return Container(
-      padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
-      decoration: BoxDecoration(
-        color: AppTheme.getCardColor(context),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: AppTheme.getBorderColor(context)),
-      ),
-      child: Row(
-        children: [
-          Container(
-            padding: const EdgeInsets.all(8),
-            decoration: BoxDecoration(
-              color: Theme.of(context).primaryColor.withOpacity(0.1),
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Icon(
-              themeProvider.themeIcon,
-              color: Theme.of(context).primaryColor,
-              size: 24,
-            ),
-          ),
-          const SizedBox(width: 16),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Theme',
-                  style: const TextStyle(
-                    fontWeight: FontWeight.w600,
-                    fontSize: 16,
-                  ),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  themeProvider.currentThemeDescription,
-                  style: TextStyle(
-                    color: Theme.of(context).textTheme.bodySmall?.color,
-                    fontSize: 13,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          Switch(
-            value: themeProvider.isDarkMode,
-            onChanged: (value) async {
-              // Show loading indicator during theme switch
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: Row(
-                    children: [
-                      SizedBox(
-                        width: 16,
-                        height: 16,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          color: Colors.white,
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      Text('Switching to ${value ? "Dark" : "Light"} mode...'),
-                    ],
-                  ),
-                  duration: const Duration(seconds: 1),
-                  backgroundColor: Colors.blue,
-                ),
-              );
-
-              await themeProvider.toggleTheme();
-
-              // Success message
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: Row(
-                    children: [
-                      Icon(
-                        themeProvider.isDarkMode ? Icons.dark_mode : Icons.light_mode,
-                        color: Colors.white,
-                        size: 20,
-                      ),
-                      const SizedBox(width: 8),
-                      Text('${themeProvider.currentThemeDescription} activated!'),
-                    ],
-                  ),
-                  backgroundColor: Colors.green,
-                  duration: const Duration(seconds: 2),
-                ),
-              );
-            },
-            activeColor: Theme.of(context).primaryColor,
-          ),
-        ],
-      ),
-    );
-  }
 
   Widget _buildSectionTitle(String title) {
     return Text(
@@ -870,7 +820,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       child: Container(
         padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
         decoration: BoxDecoration(
-          border: Border.all(color: AppTheme.getBorderColor(context)),
+          border: Border.all(color: Colors.grey.shade300),
           borderRadius: BorderRadius.circular(8),
         ),
         child: Row(
