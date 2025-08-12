@@ -189,7 +189,7 @@ class _AILocationSearchScreenState extends State<AILocationSearchScreen> {
   // Method for quick search with hint
   Future<void> _performQuickSearch(String query) async {
     _searchController.text = query;
-    await _performAISearch();
+    await _performOptimizedQuickSearch(query);
   }
 
   // ENHANCED - uses same LocationService as HomeMapScreen
@@ -384,59 +384,421 @@ class _AILocationSearchScreenState extends State<AILocationSearchScreen> {
     });
 
     print('✅ HYBRID: Final combined results: ${combinedResults.length}');
-    return combinedResults.take(8).toList();
+    return combinedResults.take(20).toList();
   }
+  
+	// NEW METHOD: Expanded nearby search with translation
+	Future<List<AILocationResult>> _performExpandedNearbySearch(String query) async {
+	  if (_currentLatLng == null) return [];
 
-	  // NEW METHOD: Search using Nominatim (OpenStreetMap) instead of Google Places - ENHANCED
-	Future<List<AILocationResult>> _searchNominatimDirectly(String query) async {
-	  List<AILocationResult> results = [];
-
-	  if (_currentLatLng == null) return results;
-
+	  print('🔍 EXPANDED SEARCH: Starting for "$query"');
+	  
+	  // Use the new expanded search directly with Nominatim
+	  return await _searchNominatimDirectly(query);
+	}
+  
+	// NEW METHOD: Get country code from current location for language detection
+	Future<String> _getCurrentCountryCode() async {
+	  if (_currentLatLng == null) return 'AT'; // Default to Austria
+	  
 	  try {
-		print('🔍 NOMINATIM ENHANCED: Starting search for "$query"');
+		final url = 'https://nominatim.openstreetmap.org/reverse'
+			'?format=json'
+			'&lat=${_currentLatLng!.latitude}'
+			'&lon=${_currentLatLng!.longitude}'
+			'&zoom=18'
+			'&addressdetails=1';
 
-		// Clean query for Nominatim
-		String cleanQuery = query.toLowerCase()
-			.replaceAll('nearby', '')
-			.replaceAll('around', '')
-			.replaceAll('close', '')
-			.replaceAll('near me', '')
-			.replaceAll('in the area', '')
-			.trim();
+		final response = await http.get(
+		  Uri.parse(url),
+		  headers: {'User-Agent': 'LocadoApp/1.0'},
+		).timeout(Duration(seconds: 5));
 
-		// STRATEGY 1: Search with specific amenity tags (more precise)
-		results.addAll(await _searchNominatimWithAmenity(cleanQuery));
-
-		// STRATEGY 2: If not enough results, try general search
-		if (results.length < 3) {
-		  final generalResults = await _searchNominatimGeneral(cleanQuery);
+		if (response.statusCode == 200) {
+		  final data = jsonDecode(response.body);
+		  final address = data['address'] as Map<String, dynamic>?;
+		  final countryCode = address?['country_code']?.toString().toUpperCase();
 		  
-		  // Add non-duplicate results
-		  Set<String> existingNames = results.map((r) => r.name.toLowerCase()).toSet();
-		  for (final result in generalResults) {
-			if (!existingNames.contains(result.name.toLowerCase()) && results.length < 8) {
-			  results.add(result);
-			  existingNames.add(result.name.toLowerCase());
+		  print('🌍 COUNTRY DETECTION: Detected country code: $countryCode');
+		  return countryCode ?? 'AT';
+		}
+	  } catch (e) {
+		print('❌ COUNTRY DETECTION: Error = $e');
+	  }
+	  
+	  return 'AT'; // Fallback to Austria
+	}
+
+	// NEW METHOD: Basic translation mapping for major countries
+	Map<String, Map<String, List<String>>> get _basicTranslations => {
+	  'AT': { // Austria - German
+		'pharmacy': ['apotheke', 'pharmazie'],
+		'restaurant': ['restaurant', 'gasthof', 'gasthaus', 'wirtshaus'],
+		'coffee': ['kaffeehaus', 'cafe', 'konditorei'],
+		'gas': ['tankstelle'],
+		'supermarket': ['supermarkt', 'lebensmittel', 'spar', 'billa', 'hofer'],
+		'bank': ['bank', 'sparkasse', 'raiffeisen'],
+		'hospital': ['krankenhaus', 'spital'],
+	  },
+	  'DE': { // Germany - German
+		'pharmacy': ['apotheke', 'pharmazie'],
+		'restaurant': ['restaurant', 'gaststätte', 'gasthof'],
+		'coffee': ['kaffeehaus', 'cafe', 'konditorei'],
+		'gas': ['tankstelle'],
+		'supermarket': ['supermarkt', 'edeka', 'rewe', 'aldi', 'lidl'],
+		'bank': ['bank', 'sparkasse'],
+		'hospital': ['krankenhaus'],
+	  },
+	  'IT': { // Italy - Italian
+		'pharmacy': ['farmacia'],
+		'restaurant': ['ristorante', 'trattoria', 'osteria', 'pizzeria'],
+		'coffee': ['bar', 'caffe', 'pasticceria'],
+		'gas': ['distributore', 'benzina'],
+		'supermarket': ['supermercato', 'alimentari'],
+		'bank': ['banca'],
+		'hospital': ['ospedale'],
+	  },
+	  'FR': { // France - French
+		'pharmacy': ['pharmacie'],
+		'restaurant': ['restaurant', 'brasserie', 'bistrot'],
+		'coffee': ['cafe', 'salon de the'],
+		'gas': ['station service', 'essence'],
+		'supermarket': ['supermarche', 'epicerie'],
+		'bank': ['banque'],
+		'hospital': ['hopital'],
+	  },
+	  'ES': { // Spain - Spanish
+		'pharmacy': ['farmacia'],
+		'restaurant': ['restaurante', 'taberna', 'mesón'],
+		'coffee': ['cafeteria', 'bar'],
+		'gas': ['gasolinera'],
+		'supermarket': ['supermercado'],
+		'bank': ['banco'],
+		'hospital': ['hospital'],
+	  },
+	  'HR': { // Croatia - Croatian
+		'pharmacy': ['ljekarna', 'apoteka'],
+		'restaurant': ['restoran', 'konoba', 'gostiona'],
+		'coffee': ['kavana', 'caffe bar'],
+		'gas': ['benzinska postaja'],
+		'supermarket': ['supermarket', 'trgovina'],
+		'bank': ['banka'],
+		'hospital': ['bolnica'],
+	  },
+	};
+
+	// NEW METHOD: Generate multi-language search terms
+	Future<List<String>> _getMultiLanguageSearchTerms(String query) async {
+	  List<String> searchTerms = [query]; // Always include English
+	  
+	  try {
+		final countryCode = await _getCurrentCountryCode();
+		final translations = _basicTranslations[countryCode];
+		
+		if (translations != null) {
+		  // Find matching category and add local terms
+		  for (final category in translations.keys) {
+			if (query.toLowerCase().contains(category)) {
+			  searchTerms.addAll(translations[category]!);
+			  print('🌐 TRANSLATION: "$query" + local terms for $countryCode: ${translations[category]}');
+			  break;
 			}
 		  }
 		}
-
-		// STRATEGY 3: Sort by distance and filter to very close places only
-		results = results.where((result) => 
-		  result.distanceFromUser != null && result.distanceFromUser! <= 2000 // 2km max
-		).toList();
-
-		results.sort((a, b) => a.distanceFromUser!.compareTo(b.distanceFromUser!));
-
-		print('✅ NOMINATIM ENHANCED: Final results: ${results.length}');
-		return results.take(6).toList(); // Limit to 6 closest results
-
+		
+		// Remove duplicates and empty strings
+		searchTerms = searchTerms.where((term) => term.trim().isNotEmpty).toSet().toList();
+		
+		print('✅ MULTI-LANGUAGE: Final search terms: $searchTerms');
+		return searchTerms;
+		
 	  } catch (e) {
-		print('❌ NOMINATIM ENHANCED: Error = $e');
-		return results;
+		print('❌ MULTI-LANGUAGE: Error = $e, using English only');
+		return [query];
 	  }
 	}
+	
+	// NEW METHOD: Get local language terms for target location
+		Future<List<String>> _getLocalTermsForTargetLocation(String query, String targetLocation) async {
+		  try {
+			final prompt = '''You are a local language expert.
+
+		The user is searching for: "$query"
+		In this location: $targetLocation
+
+		Provide search terms that locals would actually use in $targetLocation for this type of business/service.
+
+		For "$query" in $targetLocation, what terms do locals use?
+
+		Respond with ONLY a comma-separated list of local terms, no other text.''';
+
+			final response = await http.post(
+			  Uri.parse('https://api.openai.com/v1/chat/completions'),
+			  headers: {
+				'Content-Type': 'application/json',
+				'Authorization': 'Bearer $_openAIApiKey',
+			  },
+			  body: jsonEncode({
+				'model': 'gpt-3.5-turbo',
+				'messages': [
+				  {'role': 'system', 'content': prompt},
+				],
+				'max_tokens': 100,
+				'temperature': 0.2,
+			  }),
+			);
+
+			if (response.statusCode == 200) {
+			  final data = jsonDecode(response.body);
+			  final localTerms = data['choices'][0]['message']['content'].trim();
+			  
+			  // SIGURNO PARSIRANJE
+			  final termsList = <String>[];
+			  for (final term in localTerms.split(',')) {
+				final cleanTerm = term.trim();
+				if (cleanTerm.isNotEmpty) {
+				  termsList.add(cleanTerm);
+				}
+			  }
+			  
+			  print('🌐 LOCAL TERMS for $targetLocation: "$query" → $termsList');
+			  return termsList;
+			}
+		  } catch (e) {
+			print('❌ LOCAL TERMS: Error = $e');
+		  }
+		  
+		  return <String>[];
+		}
+	
+	// NEW METHOD: AI-powered query translation and expansion
+	Future<List<String>> _getExpandedSearchTerms(String originalQuery) async {
+	  List<String> expandedTerms = [originalQuery]; // Always include original
+	  
+	  try {
+		final countryCode = await _getCurrentCountryCode();
+		
+		// STEP 1: Optimize query for OSM search - UNIVERSAL
+		if (!_isEnglishQuery(originalQuery)) {
+		  final optimizedQuery = await _optimizeQueryForOSM(originalQuery);  // ← NOVO
+		  if (optimizedQuery != originalQuery) {
+			expandedTerms.add(optimizedQuery);
+			print('🔧 QUERY OPTIMIZATION: "$originalQuery" → "$optimizedQuery"');
+		  }
+		}
+		
+		// STEP 2: For each term, get local language versions
+		for (String term in List.from(expandedTerms)) {
+		  final localTerms = await _getLocalTermsForQuery(term, countryCode);
+		  expandedTerms.addAll(localTerms);
+		}
+		
+		// Remove duplicates
+		expandedTerms = expandedTerms.toSet().toList();
+		
+		print('✅ EXPANDED SEARCH: Final terms: $expandedTerms');
+		return expandedTerms;
+		
+	  } catch (e) {
+		print('❌ EXPANDED SEARCH: Error = $e');
+		return [originalQuery];
+	  }
+	}
+
+	// NEW METHOD: Check if query is in English
+	bool _isEnglishQuery(String query) {
+	  final lowerQuery = query.toLowerCase();
+	  
+	  // Check for English keywords
+	  final englishKeywords = [
+		'find', 'search', 'nearby', 'near me', 'around', 'close',
+		'restaurant', 'pharmacy', 'coffee', 'gas', 'bank', 'hospital',
+		'hairdresser', 'barber', 'salon', 'shop', 'store'
+	  ];
+	  
+	  return englishKeywords.any((keyword) => lowerQuery.contains(keyword));
+	}
+
+	// NEW METHOD: AI-powered OSM query optimization - UNIVERSAL
+	Future<String> _optimizeQueryForOSM(String query) async {
+	  try {
+		final prompt = '''You are an OpenStreetMap search optimization expert.
+
+	Your task: Take any search query in ANY language and expand it with the BEST possible search terms that will help find relevant locations in OpenStreetMap/Nominatim.
+
+	Rules:
+	1. Understand what type of business/service the user wants (regardless of language)
+	2. Generate search terms that businesses actually use in their names
+	3. Include synonyms and alternative terms for that business type
+	4. Add both English and local language variations when helpful
+	5. Think globally - what would this business be called in different countries?
+
+	User query: "$query"
+
+	Respond with ONLY the optimized search terms, no other text.''';
+
+		final response = await http.post(
+		  Uri.parse('https://api.openai.com/v1/chat/completions'),
+		  headers: {
+			'Content-Type': 'application/json',
+			'Authorization': 'Bearer $_openAIApiKey',
+		  },
+		  body: jsonEncode({
+			'model': 'gpt-3.5-turbo',
+			'messages': [
+			  {'role': 'system', 'content': prompt},
+			],
+			'max_tokens': 100,
+			'temperature': 0.2,
+		  }),
+		);
+
+		if (response.statusCode == 200) {
+		  final data = jsonDecode(response.body);
+		  final optimizedQuery = data['choices'][0]['message']['content'].trim();
+		  
+		  print('🔧 OSM OPTIMIZATION: "$query" → "$optimizedQuery"');
+		  return optimizedQuery;
+		}
+	  } catch (e) {
+		print('❌ OSM OPTIMIZATION: Error = $e');
+	  }
+	  
+	  return query; // Fallback to original
+	}
+
+	
+	// NEW METHOD: Get local terms for a query
+	Future<List<String>> _getLocalTermsForQuery(String query, String countryCode) async {
+	  List<String> localTerms = [];
+	  
+	  final translations = _basicTranslations[countryCode];
+	  if (translations == null) return localTerms;
+	  
+	  final lowerQuery = query.toLowerCase();
+	  
+	  // Enhanced mapping with more specific terms
+	  final enhancedMapping = {
+		'hairdresser': ['friseur', 'friseursalon', 'coiffeur'],
+		'barber': ['barbier', 'herrenfriseur'],
+		'salon': ['salon', 'schönheitssalon'],
+		'bakery': ['bäckerei', 'backhaus'],
+		'butcher': ['fleischerei', 'metzgerei', 'fleischhauer'],
+		'dentist': ['zahnarzt', 'dental'],
+		'optician': ['optiker', 'brille'],
+		'jewelry': ['juwelier', 'schmuck'],
+		'bookstore': ['buchhandlung', 'bücher'],
+		'electronics': ['elektronik', 'elektro'],
+		'clothing': ['kleidung', 'mode', 'bekleidung'],
+		'shoes': ['schuhe', 'schuhgeschäft'],
+	  };
+	  
+	  // Check for specific terms
+	  for (final english in enhancedMapping.keys) {
+		if (lowerQuery.contains(english)) {
+		  localTerms.addAll(enhancedMapping[english]!);
+		  break;
+		}
+	  }
+	  
+	  // Check existing translation mapping
+	  for (final category in translations.keys) {
+		if (lowerQuery.contains(category)) {
+		  localTerms.addAll(translations[category]!);
+		  break;
+		}
+	  }
+	  
+	  return localTerms;
+	}
+
+	// UPDATED METHOD: Search using Nominatim with multi-language support
+		Future<List<AILocationResult>> _searchNominatimDirectly(String query) async {
+		  List<AILocationResult> results = [];
+
+		  if (_currentLatLng == null) return results;
+
+		  try {
+			print('🔍 NOMINATIM ENHANCED: Starting multi-language search for "$query"');
+
+			// Clean query for Nominatim
+			String cleanQuery = query.toLowerCase()
+				.replaceAll('nearby', '')
+				.replaceAll('around', '')
+				.replaceAll('close', '')
+				.replaceAll('near me', '')
+				.replaceAll('in the area', '')
+				.trim();
+
+			// STEP 1: Get multi-language search terms
+			final searchTerms = await _getExpandedSearchTerms(cleanQuery);
+			
+			// STEP 2: Search with each term using DIRECT Nominatim search
+			for (String searchTerm in searchTerms) {
+			  print('🌐 DIRECT SEARCH: "$searchTerm" (${searchTerms.indexOf(searchTerm) + 1}/${searchTerms.length})');
+			  
+			  // Use direct Nominatim search without OSM tag filtering
+			  final directResults = await _searchNominatimGeneral(searchTerm);
+			  results.addAll(directResults);
+			  
+			  // If we have enough results from this term, continue to next
+			  if (results.length >= 20) break;
+			}
+
+			// STEP 3: If still not enough results, try general search with all terms
+			/*if (results.length < 3) {
+			  for (String searchTerm in searchTerms) {
+				final generalResults = await _searchNominatimGeneral(searchTerm);
+				
+				// Add non-duplicate results
+				Set<String> existingNames = results.map((r) => r.name.toLowerCase()).toSet();
+				for (final result in generalResults) {
+				  if (!existingNames.contains(result.name.toLowerCase()) && results.length < 20) {
+					results.add(result);
+					existingNames.add(result.name.toLowerCase());
+				  }
+				}
+				
+				if (results.length >= 20) break;
+			  }
+			}*/
+
+			// STEP 4: Remove duplicates by coordinates (in case same place has multiple names)
+			results = _removeDuplicatesByCoordinates(results);
+
+			// STEP 5: Sort by distance and filter to close places only
+			results = results.where((result) => 
+			  result.distanceFromUser != null && result.distanceFromUser! <= 2000 // 2km max
+			).toList();
+
+			results.sort((a, b) => a.distanceFromUser!.compareTo(b.distanceFromUser!));
+
+			print('✅ NOMINATIM ENHANCED: Final results: ${results.length}');
+			return results.take(20).toList(); // Limit to 20 closest results
+
+		  } catch (e) {
+			print('❌ NOMINATIM ENHANCED: Error = $e');
+			return results;
+		  }
+		}
+
+		// NEW HELPER METHOD: Remove duplicate locations by coordinates
+		List<AILocationResult> _removeDuplicatesByCoordinates(List<AILocationResult> results) {
+		  Map<String, AILocationResult> uniqueLocations = {};
+		  
+		  for (final result in results) {
+			// Create key based on coordinates (rounded to avoid floating point issues)
+			final key = '${result.coordinates.latitude.toStringAsFixed(6)}_${result.coordinates.longitude.toStringAsFixed(6)}';
+			
+			// Keep the result with more task items or better name
+			if (!uniqueLocations.containsKey(key) || 
+				result.taskItems.length > uniqueLocations[key]!.taskItems.length) {
+			  uniqueLocations[key] = result;
+			}
+		  }
+		  
+		  return uniqueLocations.values.toList();
+		}
 
 	// NEW METHOD: Search with specific amenity tags
 	Future<List<AILocationResult>> _searchNominatimWithAmenity(String query) async {
@@ -445,7 +807,7 @@ class _AILocationSearchScreenState extends State<AILocationSearchScreen> {
 	  if (_currentLatLng == null) return results;
 
 	  // Map queries to specific amenity types
-	  List<String> amenityTypes = _getAmenityTypesForQuery(query);
+	  List<String> amenityTypes = await _getAmenityTypesForQuery(query);
 	  
 	  print('🏷️ AMENITY SEARCH: Using amenity types: $amenityTypes');
 
@@ -454,15 +816,19 @@ class _AILocationSearchScreenState extends State<AILocationSearchScreen> {
 		  // Search with amenity tag - more precise than general search
 		  final url = 'https://overpass-api.de/api/interpreter';
 		  
-		  // Use Overpass API for precise amenity search
-		  final overpassQuery = '''
-	[out:json][timeout:10];
-	(
-	  node["amenity"="$amenityType"](around:1500,${_currentLatLng!.latitude},${_currentLatLng!.longitude});
-	  way["amenity"="$amenityType"](around:1500,${_currentLatLng!.latitude},${_currentLatLng!.longitude});
-	);
-	out center meta;
-	''';
+		  // Use Overpass API for comprehensive tag search - ENHANCED
+			final overpassQuery = '''
+			[out:json][timeout:10];
+			(
+			  node["amenity"="$amenityType"](around:1500,${_currentLatLng!.latitude},${_currentLatLng!.longitude});
+			  way["amenity"="$amenityType"](around:1500,${_currentLatLng!.latitude},${_currentLatLng!.longitude});
+			  node["shop"="$amenityType"](around:1500,${_currentLatLng!.latitude},${_currentLatLng!.longitude});
+			  way["shop"="$amenityType"](around:1500,${_currentLatLng!.latitude},${_currentLatLng!.longitude});
+			  node["healthcare"="$amenityType"](around:1500,${_currentLatLng!.latitude},${_currentLatLng!.longitude});
+			  way["healthcare"="$amenityType"](around:1500,${_currentLatLng!.latitude},${_currentLatLng!.longitude});
+			);
+			out center meta;
+			''';
 
 		  final response = await http.post(
 			Uri.parse(url),
@@ -479,7 +845,7 @@ class _AILocationSearchScreenState extends State<AILocationSearchScreen> {
 
 			print('🏷️ AMENITY SEARCH: Found ${elements.length} $amenityType places');
 
-			for (final element in elements.take(5)) { // Max 5 per type
+			for (final element in elements.take(20)) { // Max 20 per type
 			  final tags = element['tags'] as Map<String, dynamic>?;
 			  if (tags == null) continue;
 
@@ -556,7 +922,7 @@ class _AILocationSearchScreenState extends State<AILocationSearchScreen> {
 		if (response.statusCode == 200) {
 		  final List<dynamic> places = jsonDecode(response.body);
 		  
-		  for (final place in places.take(8)) { // Limit results
+		  for (final place in places.take(20)) { // Limit results
 			final lat = double.parse(place['lat']);
 			final lng = double.parse(place['lon']);
 			final name = place['display_name'] ?? 'Unknown Place';
@@ -593,52 +959,106 @@ class _AILocationSearchScreenState extends State<AILocationSearchScreen> {
 	}
 
 	// NEW METHOD: Map queries to specific amenity types
-	List<String> _getAmenityTypesForQuery(String query) {
+	// UPDATED METHOD: Dynamic amenity mapping using multi-language support
+	Future<List<String>> _getAmenityTypesForQuery(String query) async {
 	  final lowerQuery = query.toLowerCase();
 	  
-	  // Restaurant types
-	  if (lowerQuery.contains('restaurant') || lowerQuery.contains('food') || 
-		  lowerQuery.contains('eat') || lowerQuery.contains('dining')) {
-		return ['restaurant', 'fast_food', 'cafe'];
-	  }
+	  print('🏷️ DYNAMIC TAG MAPPING: Analyzing "$query"');
 	  
-	  // Coffee and cafes
-	  if (lowerQuery.contains('coffee') || lowerQuery.contains('cafe') || 
-		  lowerQuery.contains('espresso') || lowerQuery.contains('cappuccino')) {
-		return ['cafe', 'restaurant'];
+	  try {
+		// Get current country and its translations
+		final countryCode = await _getCurrentCountryCode();
+		final translations = _basicTranslations[countryCode] ?? {};
+		
+		// Check each category in translations
+		for (final category in translations.keys) {
+		  final localTerms = translations[category]!;
+		  
+		  // Check if query contains English category name
+		  if (lowerQuery.contains(category)) {
+			final amenityTags = _getCategoryAmenityTags(category);
+			print('🏷️ MATCH: "$query" → category: $category → tags: $amenityTags');
+			return amenityTags;
+		  }
+		  
+		        if (lowerQuery.contains('${category}s') || lowerQuery.contains('${category}ies')) {
+					final amenityTags = _getCategoryAmenityTags(category);
+					print('🏷️ PLURAL MATCH: "$query" → category: $category → tags: $amenityTags');
+					return amenityTags;
+				  }
+		  
+		  // Check if query contains any local language terms
+		  for (final localTerm in localTerms) {
+			if (lowerQuery.contains(localTerm.toLowerCase())) {
+			  final amenityTags = _getCategoryAmenityTags(category);
+			  print('🏷️ LOCAL MATCH: "$query" contains "$localTerm" → category: $category → tags: $amenityTags');
+			  return amenityTags;
+			}
+		  }
+		}
+		
+		// Fallback: try to detect category from common English terms
+		final fallbackCategory = _detectCategoryFallback(lowerQuery);
+		final amenityTags = _getCategoryAmenityTags(fallbackCategory);
+		print('🏷️ FALLBACK: "$query" → category: $fallbackCategory → tags: $amenityTags');
+		return amenityTags;
+		
+	  } catch (e) {
+		print('❌ DYNAMIC TAG MAPPING: Error = $e');
+		// Ultimate fallback
+		return ['restaurant', 'cafe', 'fast_food'];
 	  }
-	  
-	  // Pharmacy
-	  if (lowerQuery.contains('pharmacy') || lowerQuery.contains('medicine') || 
-		  lowerQuery.contains('drug')) {
-		return ['pharmacy'];
+	}
+
+	// NEW HELPER METHOD: Map category to OSM amenity tags
+	List<String> _getCategoryAmenityTags(String category) {
+	  switch (category) {
+		case 'pharmacy':
+		  return ['pharmacy', 'chemist', 'healthcare'];
+		case 'restaurant':
+		  return ['restaurant', 'fast_food', 'cafe', 'bar', 'pub'];
+		case 'coffee':
+		  return ['cafe', 'restaurant'];
+		case 'gas':
+		  return ['fuel'];
+		case 'supermarket':
+		  return ['marketplace', 'supermarket'];
+		case 'bank':
+		  return ['bank', 'atm'];
+		case 'hospital':
+		  return ['hospital', 'clinic', 'doctors'];
+		default:
+		  return ['restaurant', 'cafe', 'fast_food']; // Default fallback
 	  }
-	  
-	  // Gas stations
-	  if (lowerQuery.contains('gas') || lowerQuery.contains('fuel') || 
-		  lowerQuery.contains('petrol') || lowerQuery.contains('station')) {
-		return ['fuel'];
+	}
+
+	// NEW HELPER METHOD: Fallback category detection for unknown terms
+	String _detectCategoryFallback(String lowerQuery) {
+	  if (lowerQuery.contains('restaurant') || lowerQuery.contains('restaurants') ||
+		  lowerQuery.contains('food') || lowerQuery.contains('eat') || lowerQuery.contains('dining')) {
+		return 'restaurant';
 	  }
-	  
-	  // Shopping
-	  if (lowerQuery.contains('shop') || lowerQuery.contains('store') || 
-		  lowerQuery.contains('supermarket') || lowerQuery.contains('market')) {
-		return ['marketplace', 'supermarket'];
+	  if (lowerQuery.contains('coffee') || lowerQuery.contains('espresso')) {
+		return 'coffee';
 	  }
-	  
-	  // Banks and ATMs
+	  if (lowerQuery.contains('pharmacy') || lowerQuery.contains('pharmacies') || 
+		  lowerQuery.contains('medicine') || lowerQuery.contains('drug')) {
+		return 'pharmacy';
+	  }
+	  if (lowerQuery.contains('fuel') || lowerQuery.contains('petrol') || lowerQuery.contains('station')) {
+		return 'gas';
+	  }
+	  if (lowerQuery.contains('shop') || lowerQuery.contains('store') || lowerQuery.contains('market')) {
+		return 'supermarket';
+	  }
 	  if (lowerQuery.contains('bank') || lowerQuery.contains('atm')) {
-		return ['bank', 'atm'];
+		return 'bank';
+	  }
+	  if (lowerQuery.contains('hospital') || lowerQuery.contains('doctor') || lowerQuery.contains('medical')) {
+		return 'hospital';
 	  }
 	  
-	  // Medical
-	  if (lowerQuery.contains('hospital') || lowerQuery.contains('doctor') || 
-		  lowerQuery.contains('medical') || lowerQuery.contains('clinic')) {
-		return ['hospital', 'clinic', 'doctors'];
-	  }
-	  
-	  // Default - try restaurant (most common search)
-	  return ['restaurant', 'cafe', 'fast_food'];
+	  return 'restaurant'; // Ultimate fallback
 	}
 
 	// NEW METHOD: Get description based on amenity type
@@ -922,21 +1342,20 @@ Return only a JSON array, no other text.''';
 
       List<AILocationResult> results = [];
 
-      if (searchIntent.isLocalSearch) {
-        // NEARBY SEARCH - use hybrid approach with Nominatim
-        print('📍 NEARBY SEARCH: Using current location');
-        results = await _performHybridNearbySearch(searchIntent.cleanQuery);
-        _showSnackBar('Found ${results.length} nearby locations', Colors.green);
-
-      } else {
-        // SPECIFIC LOCATION SEARCH
-        print('🌍 LOCATION SEARCH: Searching in ${searchIntent.targetLocation}');
-        results = await _performSpecificLocationSearch(
-            searchIntent.cleanQuery,
-            searchIntent.targetLocation!
-        );
-        _showSnackBar('Found ${results.length} locations in ${searchIntent.targetLocation}', Colors.green);
-      }
+		if (searchIntent.isLocalSearch) {
+		  // NEARBY SEARCH - use NEW expanded search logic
+		  print('📍 NEARBY SEARCH: Using current location with expanded terms');
+		  results = await _performExpandedNearbySearch(searchIntent.cleanQuery);
+		  _showSnackBar('Found ${results.length} nearby locations', Colors.green);
+		} else {
+		  // SPECIFIC LOCATION SEARCH
+		  print('🌍 LOCATION SEARCH: Searching in ${searchIntent.targetLocation}');
+		  results = await _performSpecificLocationSearch(
+			  searchIntent.cleanQuery,
+			  searchIntent.targetLocation!
+		  );
+		  _showSnackBar('Found ${results.length} locations in ${searchIntent.targetLocation}', Colors.green);
+		}
 
       setState(() {
         _searchResults = results;
@@ -961,34 +1380,158 @@ Return only a JSON array, no other text.''';
     }
   }
 
-  // Search for locations in a specific city/location
-  Future<List<AILocationResult>> _performSpecificLocationSearch(String query, String targetLocation) async {
-    print('🏙️ SPECIFIC LOCATION SEARCH: "$query" in "$targetLocation"');
+	// Search for locations in a specific city/location
+	Future<List<AILocationResult>> _performSpecificLocationSearch(String query, String targetLocation) async {
+	  print('🏙️ SPECIFIC LOCATION SEARCH: "$query" in "$targetLocation"');
 
-    try {
-      // STEP 1: Get coordinates of the target location using Nominatim
-      final targetCoordinates = await _getTargetLocationCoordinatesNominatim(targetLocation);
+	  try {
+		// STEP 1: Get coordinates of the target location using Nominatim
+		final targetCoordinates = await _getTargetLocationCoordinatesNominatim(targetLocation);
 
-      if (targetCoordinates == null) {
-        throw Exception('Could not find coordinates for $targetLocation');
-      }
+		if (targetCoordinates == null) {
+		  throw Exception('Could not find coordinates for $targetLocation');
+		}
 
-      print('✅ TARGET LOCATION: $targetLocation = ${targetCoordinates.latitude}, ${targetCoordinates.longitude}');
+		print('✅ TARGET LOCATION: $targetLocation = ${targetCoordinates.latitude}, ${targetCoordinates.longitude}');
 
-      // STEP 2: Search using AI with target location context
-      final aiResults = await _getAILocationSuggestionsForSpecificLocation(query, targetLocation, targetCoordinates);
+		// STEP 2: DIRECT OSM search with AI-optimized terms
+		final directOSMResults = await _searchDirectlyInTargetLocation(query, targetCoordinates, targetLocation);
 
-      // STEP 3: Enrich with real coordinates using Nominatim
-      final enrichedResults = await _enrichWithRealCoordinatesForLocation(aiResults, query, targetCoordinates);
+		print('✅ SPECIFIC LOCATION SEARCH: Found ${directOSMResults.length} results in $targetLocation');
+		return directOSMResults;
 
-      print('✅ SPECIFIC LOCATION SEARCH: Found ${enrichedResults.length} results in $targetLocation');
-      return enrichedResults;
+	  } catch (e) {
+		print('❌ SPECIFIC LOCATION SEARCH: Error = $e');
+		throw Exception('Failed to search in $targetLocation: $e');
+	  }
+	}
+  
+	// ENHANCED METHOD: Direct OSM search with dynamic radius and more results
+	Future<List<AILocationResult>> _searchDirectlyInTargetLocation(
+		String query, 
+		UniversalLatLng targetCoords, 
+		String locationName
+	) async {
+	  List<AILocationResult> results = [];
+	  
+	  try {
+		// Get AI-optimized terms directly (no country detection)
+		final optimizedQuery = await _optimizeQueryForOSM(query);
+		final searchTerms = [query, ...optimizedQuery.split(',').map((t) => t.trim())];
+		
+		// Add local language terms for target location
+		final localTerms = await _getLocalTermsForTargetLocation(query, locationName);
+		searchTerms.addAll(localTerms);
+		
+		// Remove duplicates
+		final uniqueTerms = searchTerms.toSet().toList();
+		
+		print('🗺️ ENHANCED SEARCH TERMS for $locationName: $uniqueTerms');
+		
+		// DYNAMIC RADIUS SEARCH - start small and increase until we find enough results
+		final List<double> radiusList = [0.02, 0.05, 0.1, 0.2, 0.5]; // km equivalent
+		final List<double> distanceLimits = [5000, 10000, 20000, 50000, 100000]; // meters
+		
+		for (int radiusIndex = 0; radiusIndex < radiusList.length; radiusIndex++) {
+		  final radius = radiusList[radiusIndex];
+		  final distanceLimit = distanceLimits[radiusIndex];
+		  
+		  print('🔍 TRYING RADIUS: ${(radius * 111).toStringAsFixed(1)}km (${distanceLimit/1000}km distance limit)');
+		  
+		  for (String term in uniqueTerms.take(8)) { // Search with up to 8 terms
+			final url = 'https://nominatim.openstreetmap.org/search'
+				'?q=${Uri.encodeComponent(term)}'
+				'&format=json'
+				'&addressdetails=1'
+				'&limit=20' // Increased limit
+				'&lat=${targetCoords.latitude}'
+				'&lon=${targetCoords.longitude}'
+				'&bounded=1'
+				'&viewbox=${targetCoords.longitude - radius},${targetCoords.latitude + radius},${targetCoords.longitude + radius},${targetCoords.latitude - radius}';
 
-    } catch (e) {
-      print('❌ SPECIFIC LOCATION SEARCH: Error = $e');
-      throw Exception('Failed to search in $targetLocation: $e');
-    }
-  }
+			final response = await http.get(
+			  Uri.parse(url),
+			  headers: {'User-Agent': 'LocadoApp/1.0'},
+			).timeout(Duration(seconds: 8));
+
+			if (response.statusCode == 200) {
+			  final List<dynamic> places = jsonDecode(response.body);
+			  
+			  for (final place in places.take(10)) { // Process up to 10 per term
+				final lat = double.parse(place['lat']);
+				final lng = double.parse(place['lon']);
+				final name = place['display_name'] ?? 'Unknown Place';
+				final type = place['type'] ?? 'location';
+				
+				// Calculate distance from target
+				final distance = Geolocator.distanceBetween(
+				  targetCoords.latitude,
+				  targetCoords.longitude,
+				  lat,
+				  lng,
+				);
+
+				// Check if within distance limit and not already added
+				if (distance <= distanceLimit) {
+				  final cleanName = _cleanDisplayName(name);
+				  
+				  // Avoid duplicates by coordinates
+				  final isDuplicate = results.any((existing) => 
+					Geolocator.distanceBetween(
+					  existing.coordinates.latitude,
+					  existing.coordinates.longitude,
+					  lat,
+					  lng,
+					) < 100); // 100m tolerance
+				  
+				  if (!isDuplicate) {
+					final taskItems = await _generateTaskItemsFromType(cleanName, type);
+					
+					results.add(AILocationResult(
+					  name: cleanName,
+					  description: 'Local $type in $locationName (${(distance/1000).toStringAsFixed(1)}km away)',
+					  coordinates: UniversalLatLng(lat, lng),
+					  taskItems: taskItems,
+					  category: type,
+					  distanceFromUser: _currentLatLng != null 
+						  ? Geolocator.distanceBetween(_currentLatLng!.latitude, _currentLatLng!.longitude, lat, lng)
+						  : null,
+					));
+					
+					print('🗺️ DIRECT OSM: Found ${cleanName} in $locationName (${(distance/1000).toStringAsFixed(1)}km)');
+				  }
+				}
+			  }
+			}
+		  }
+		  
+		  // Check if we have enough results
+		  if (results.length >= 5) {
+			print('✅ FOUND ENOUGH RESULTS: ${results.length} locations within ${(radius * 111).toStringAsFixed(1)}km');
+			break;
+		  }
+		}
+		
+		// Sort by distance from target location
+		results.sort((a, b) {
+		  final distanceA = Geolocator.distanceBetween(
+			targetCoords.latitude, targetCoords.longitude,
+			a.coordinates.latitude, a.coordinates.longitude
+		  );
+		  final distanceB = Geolocator.distanceBetween(
+			targetCoords.latitude, targetCoords.longitude,
+			b.coordinates.latitude, b.coordinates.longitude
+		  );
+		  return distanceA.compareTo(distanceB);
+		});
+		
+	  } catch (e) {
+		print('❌ DIRECT OSM: Error = $e');
+	  }
+	  
+	  // Return up to 15 results
+	  return results.take(15).toList();
+	}
 
   // NEW METHOD: Get coordinates for target location using Nominatim
   Future<UniversalLatLng?> _getTargetLocationCoordinatesNominatim(String locationName) async {
@@ -1330,38 +1873,88 @@ Format your response as a valid JSON array only, no additional text.''';
    return enrichedResults;
  }
 
- // NEW METHOD: Get coordinates using Nominatim instead of Google
- Future<UniversalLatLng?> _getCoordinatesFromNominatim(String locationName, String city) async {
-   try {
-     final query = Uri.encodeComponent('$locationName $city');
-     final url = 'https://nominatim.openstreetmap.org/search'
-         '?q=$query'
-         '&format=json'
-         '&limit=1';
+	// IMPROVED METHOD: Enhanced coordinate search for specific locations
+	Future<UniversalLatLng?> _getCoordinatesFromNominatim(String locationName, String city) async {
+	  try {
+		// STRATEGY 1: Search with full name + city
+		final query1 = Uri.encodeComponent('$locationName $city');
+		var coordinates = await _tryNominatimSearch(query1);
+		if (coordinates != null) return coordinates;
+		
+		// STRATEGY 2: Search with just location name in the target city area
+		final query2 = Uri.encodeComponent(locationName);
+		coordinates = await _tryNominatimSearchWithBounds(query2, city);
+		if (coordinates != null) return coordinates;
+		
+		// STRATEGY 3: Search for general category in city (fallback)
+		final query3 = Uri.encodeComponent('hair salon $city');
+		coordinates = await _tryNominatimSearch(query3);
+		if (coordinates != null) return coordinates;
+		
+		print('❌ No coordinates found for "$locationName" in "$city"');
+		return null;
+		
+	  } catch (e) {
+		print('❌ Error getting coordinates from Nominatim: $e');
+		return null;
+	  }
+	}
 
-     final response = await http.get(
-       Uri.parse(url),
-       headers: {
-         'User-Agent': 'LocadoApp/1.0',
-       },
-     );
+	// Helper method for basic Nominatim search
+	Future<UniversalLatLng?> _tryNominatimSearch(String query) async {
+	  final url = 'https://nominatim.openstreetmap.org/search'
+		  '?q=$query'
+		  '&format=json'
+		  '&limit=1';
 
-     if (response.statusCode == 200) {
-       final List<dynamic> results = jsonDecode(response.body);
+	  final response = await http.get(
+		Uri.parse(url),
+		headers: {'User-Agent': 'LocadoApp/1.0'},
+	  );
 
-       if (results.isNotEmpty) {
-         final result = results[0];
-         final lat = double.parse(result['lat']);
-         final lng = double.parse(result['lon']);
-         return UniversalLatLng(lat, lng);
-       }
-     }
-   } catch (e) {
-     print('❌ Error getting coordinates from Nominatim: $e');
-   }
+	  if (response.statusCode == 200) {
+		final List<dynamic> results = jsonDecode(response.body);
+		if (results.isNotEmpty) {
+		  final result = results[0];
+		  final lat = double.parse(result['lat']);
+		  final lng = double.parse(result['lon']);
+		  return UniversalLatLng(lat, lng);
+		}
+	  }
+	  return null;
+	}
 
-   return null;
- }
+	// Helper method for bounded search
+	Future<UniversalLatLng?> _tryNominatimSearchWithBounds(String query, String city) async {
+	  // First get city bounds
+	  final cityCoords = await _getTargetLocationCoordinatesNominatim(city);
+	  if (cityCoords == null) return null;
+	  
+	  // Search within city bounds
+	  final bound = 0.05; // ~5km radius
+	  final url = 'https://nominatim.openstreetmap.org/search'
+		  '?q=$query'
+		  '&format=json'
+		  '&limit=3'
+		  '&bounded=1'
+		  '&viewbox=${cityCoords.longitude - bound},${cityCoords.latitude + bound},${cityCoords.longitude + bound},${cityCoords.latitude - bound}';
+
+	  final response = await http.get(
+		Uri.parse(url),
+		headers: {'User-Agent': 'LocadoApp/1.0'},
+	  );
+
+	  if (response.statusCode == 200) {
+		final List<dynamic> results = jsonDecode(response.body);
+		if (results.isNotEmpty) {
+		  final result = results[0];
+		  final lat = double.parse(result['lat']);
+		  final lng = double.parse(result['lon']);
+		  return UniversalLatLng(lat, lng);
+		}
+	  }
+	  return null;
+	}
 
  Future<void> _createSelectedTasks() async {
    final selectedResults = _searchResults.where((result) => result.isSelected).toList();
@@ -1444,65 +2037,117 @@ Format your response as a valid JSON array only, no additional text.''';
    }
  }
 
- // Detect search intent
- Future<SearchIntent> _detectSearchIntent(String originalQuery) async {
-   print('🔍 INTENT DETECTION: Analyzing query: "$originalQuery"');
+// UPDATED METHOD: AI-powered search intent detection
+Future<SearchIntent> _detectSearchIntent(String originalQuery) async {
+  print('🔍 INTENT DETECTION: Analyzing query: "$originalQuery"');
 
-   final lowerQuery = originalQuery.toLowerCase().trim();
+  try {
+    // Use AI to detect intent instead of hardcoded keywords
+    final aiIntentDetection = await _detectIntentWithAI(originalQuery);
+    
+	if (aiIntentDetection['hasSpecificLocation'] == true) {
+	  final targetLocation = aiIntentDetection['location'] as String;
+	  final cleanQuery = aiIntentDetection['cleanQuery'] as String;
+	  
+	  print('✅ INTENT: AI detected specific location: "$targetLocation"');
+	  return SearchIntent(
+		isLocalSearch: false,
+		targetLocation: targetLocation,
+		cleanQuery: cleanQuery,
+		originalQuery: originalQuery,
+	  );
+	}
 
-   // Check for explicit nearby indicators
-   final nearbyIndicators = [
-     'nearby', 'around', 'close', 'near me', 'in the area', 'walking distance',
-     'u blizini', 'blizu', 'okolina', 'u krugu', // Serbian
-     'in der nähe', 'nahe', 'umgebung', 'in der umgebung', // German
-     'près de', 'proche', 'aux alentours', 'dans le coin', // French
-     'cerca', 'vicino', 'nei dintorni', 'in zona', // Italian
-     'cerca de', 'próximo', 'en la zona', 'alrededor', // Spanish
-   ];
+	if (aiIntentDetection['isLocalSearch'] == true) {
+	  print('✅ INTENT: AI detected nearby search');
+	  return SearchIntent(
+		isLocalSearch: true,
+		targetLocation: null,
+		cleanQuery: aiIntentDetection['cleanQuery'] ?? originalQuery,
+		originalQuery: originalQuery,
+	  );
+	}
+    
+  } catch (e) {
+    print('❌ INTENT: AI detection failed: $e');
+  }
 
-   final hasNearbyIndicator = nearbyIndicators.any((indicator) =>
-       lowerQuery.contains(indicator.toLowerCase()));
+  // Fallback - assume nearby search
+  print('✅ INTENT: Defaulting to nearby search');
+  return SearchIntent(
+    isLocalSearch: true,
+    targetLocation: null,
+    cleanQuery: originalQuery,
+    originalQuery: originalQuery,
+  );
+}
 
-   if (hasNearbyIndicator) {
-     print('✅ INTENT: Nearby search detected (explicit indicator)');
-     return SearchIntent(
-       isLocalSearch: true,
-       targetLocation: null,
-       cleanQuery: originalQuery,
-       originalQuery: originalQuery,
-     );
-   }
+	// NEW METHOD: AI-powered intent detection
+	Future<Map<String, dynamic>> _detectIntentWithAI(String query) async {
+		final prompt = '''Analyze this search query and determine the search intent:
 
-   // Use AI to detect location intent
-   try {
-     final aiDetection = await _detectLocationWithAI(originalQuery);
+		1. Is this a LOCAL/NEARBY search? (user wants places near their current location)
+		2. Is this a SPECIFIC LOCATION search? (user specifies a city/country)
+		3. What is the clean search query without location indicators?
 
-     if (aiDetection['hasSpecificLocation'] == true) {
-       final targetLocation = aiDetection['location'] as String;
-       final cleanQuery = aiDetection['cleanQuery'] as String;
+		Examples:
+		"pharmacy nearby" → local: true, clean: "pharmacy"
+		"nadji frizere u blizini" → local: true, clean: "frizere" 
+		"restaurants in Paris" → location: "Paris", clean: "restaurants"
+		"nadji frizere u Banja Luci" → location: "Banja Luka", clean: "frizere"
+		"wo ist apotheke in Berlin" → location: "Berlin", clean: "apotheke"
+		"ristorante a Roma" → location: "Roma", clean: "ristorante"
+		"mjesta za provod u Zagrebu" → location: "Zagreb", clean: "mjesta za provod"
+		"coffee shops in London" → location: "London", clean: "coffee shops"
+		"coffee shops" → local: true, clean: "coffee shops" (assume nearby)
 
-       print('✅ INTENT: Specific location detected: "$targetLocation"');
+		IMPORTANT: If query contains "u [City]", "in [City]", "a [City]", "en [City]" - it's a specific location search!
 
-       return SearchIntent(
-         isLocalSearch: false,
-         targetLocation: targetLocation,
-         cleanQuery: cleanQuery,
-         originalQuery: originalQuery,
-       );
-     }
-   } catch (e) {
-     print('❌ INTENT: AI detection failed: $e');
-   }
+	User query: "$query"
 
-   // Fallback - assume nearby search
-   print('✅ INTENT: Defaulting to nearby search');
-   return SearchIntent(
-     isLocalSearch: true,
-     targetLocation: null,
-     cleanQuery: originalQuery,
-     originalQuery: originalQuery,
-   );
- }
+	Respond with ONLY this JSON format:
+	{
+	  "isLocalSearch": true/false,
+	  "hasSpecificLocation": true/false,
+	  "location": "City, Country" or null,
+	  "cleanQuery": "search terms without location words"
+	}''';
+
+	  final response = await http.post(
+		Uri.parse('https://api.openai.com/v1/chat/completions'),
+		headers: {
+		  'Content-Type': 'application/json',
+		  'Authorization': 'Bearer $_openAIApiKey',
+		},
+		body: jsonEncode({
+		  'model': 'gpt-3.5-turbo',
+		  'messages': [
+			{'role': 'system', 'content': prompt},
+		  ],
+		  'max_tokens': 200,
+		  'temperature': 0.1,
+		}),
+	  );
+
+		if (response.statusCode == 200) {
+		  final data = jsonDecode(response.body);
+		  final content = data['choices'][0]['message']['content'];
+		  
+		  // DEBUG: Print raw AI response
+		  print('🤖 AI INTENT RAW RESPONSE: "$content"');
+		  
+		  try {
+			final result = jsonDecode(content);
+			print('🤖 AI INTENT PARSED: $result');
+			return result;
+		  } catch (e) {
+			print('❌ AI INTENT PARSE ERROR: $e');
+			throw Exception('Failed to parse AI intent response: $e');
+		  }
+		}
+
+	  throw Exception('AI intent detection failed');
+	}
 
  Future<Map<String, dynamic>> _detectLocationWithAI(String query) async {
    final prompt = '''You are a search intent analyzer. Analyze the user's search query and determine:
@@ -1552,6 +2197,540 @@ Respond with ONLY this JSON format:
 
    throw Exception('AI intent detection failed');
  }
+ 
+	// ==================== OPTIMIZED QUICK SEARCH METHODS ====================
+
+	/// Get OSM tags for specific category
+	Map<String, List<String>> _getCategoryOSMTags(String category) {
+	  final categoryLower = category.toLowerCase();
+	  
+	  if (categoryLower.contains('pharmacy') || categoryLower.contains('pharmacies')) {
+		return {
+		  'amenity': ['pharmacy'],
+		  'healthcare': ['pharmacy'],
+		  'shop': ['pharmacy']
+		};
+	  }
+	  
+	  if (categoryLower.contains('restaurant') || categoryLower.contains('restaurants')) {
+		return {
+		  'amenity': ['restaurant', 'fast_food'],
+		  'cuisine': ['*'] // All cuisine types
+		};
+	  }
+	  
+	  if (categoryLower.contains('coffee')) {
+		return {
+		  'amenity': ['cafe'],
+		  'shop': ['coffee'],
+		  'cuisine': ['coffee_shop']
+		};
+	  }
+	  
+	  if (categoryLower.contains('gas') || categoryLower.contains('fuel')) {
+		return {
+		  'amenity': ['fuel']
+		};
+	  }
+	  
+	  if (categoryLower.contains('supermarket') || categoryLower.contains('market')) {
+		return {
+		  'shop': ['supermarket', 'convenience', 'grocery']
+		};
+	  }
+	  
+	  if (categoryLower.contains('bank')) {
+		return {
+		  'amenity': ['bank', 'atm']
+		};
+	  }
+	  
+	  if (categoryLower.contains('hospital')) {
+		return {
+		  'amenity': ['hospital', 'clinic'],
+		  'healthcare': ['hospital', 'clinic', 'doctor']
+		};
+	  }
+	  
+	  if (categoryLower.contains('shop')) {
+		return {
+		  'shop': ['mall', 'department_store', 'clothes', 'shoes']
+		};
+	  }
+	  
+	  // Default fallback
+	  return {
+		'amenity': ['restaurant', 'cafe']
+	  };
+	}
+
+	/// Translate category to local language using AI
+	Future<List<String>> _translateCategoryToLocal(String category, String countryCode) async {
+	  try {
+		final cacheKey = 'translation_${category}_$countryCode';
+		final prefs = await SharedPreferences.getInstance();
+		final cachedTranslation = prefs.getStringList(cacheKey);
+		
+		if (cachedTranslation != null && cachedTranslation.isNotEmpty) {
+		  print('✅ TRANSLATION: Using cached translation for $category in $countryCode');
+		  return cachedTranslation;
+		}
+		
+		final prompt = '''Translate the business category "$category" into the local language of country code "$countryCode".
+
+	Rules:
+	1. Provide 3-5 most common local terms that people actually use
+	2. Include both formal and informal/colloquial terms
+	3. Include plural forms if different
+	4. Only return terms that locals would search for
+
+	Examples:
+	- "pharmacy" in "DE" → "apotheke, pharmazie, medikamente"
+	- "restaurant" in "IT" → "ristorante, trattoria, osteria, pizzeria"
+	- "coffee" in "FR" → "cafe, cafeteria, salon de the"
+
+	Country: $countryCode
+	Category: $category
+
+	Return ONLY comma-separated terms, no other text.''';
+
+		final response = await http.post(
+		  Uri.parse('https://api.openai.com/v1/chat/completions'),
+		  headers: {
+			'Content-Type': 'application/json',
+			'Authorization': 'Bearer $_openAIApiKey',
+		  },
+		  body: jsonEncode({
+			'model': 'gpt-3.5-turbo',
+			'messages': [
+			  {'role': 'system', 'content': prompt},
+			],
+			'max_tokens': 100,
+			'temperature': 0.2,
+		  }),
+		);
+
+		if (response.statusCode == 200) {
+		  final data = jsonDecode(response.body);
+		  final content = data['choices'][0]['message']['content'].trim();
+		  
+		  // Parse terms with explicit type handling
+		  final rawTerms = content.split(',');
+		  final List<String> terms = <String>[];
+		  
+		  for (int i = 0; i < rawTerms.length; i++) {
+			final String trimmed = rawTerms[i].toString().trim();
+			if (trimmed.isNotEmpty && trimmed.length > 1) {
+			  terms.add(trimmed);
+			}
+		  }
+		  
+		  // Ensure we have at least the original category
+		  if (terms.isEmpty) {
+			terms.add(category);
+		  }
+		  
+		  // Cache translation for future use
+		  try {
+			await prefs.setStringList(cacheKey, terms);
+		  } catch (cacheError) {
+			print('⚠️ TRANSLATION: Cache save failed: $cacheError');
+		  }
+		  
+		  print('✅ TRANSLATION: AI translated "$category" to local terms: $terms');
+		  return terms;
+		} else {
+		  print('❌ TRANSLATION: API returned status ${response.statusCode}');
+		}
+		
+	  } catch (e) {
+		print('❌ TRANSLATION: Error translating category: $e');
+		
+		// Return fallback terms based on category
+		final List<String> fallbackTerms = [category];
+		
+		// Add basic fallback translations for common categories
+		final categoryLower = category.toLowerCase();
+		if (categoryLower.contains('pharmacy') && countryCode == 'AT') {
+		  fallbackTerms.addAll(['apotheke', 'pharmazie']);
+		} else if (categoryLower.contains('restaurant') && countryCode == 'AT') {
+		  fallbackTerms.addAll(['restaurant', 'gasthof']);
+		} else if (categoryLower.contains('coffee') && countryCode == 'AT') {
+		  fallbackTerms.addAll(['kaffeehaus', 'cafe']);
+		} else if (categoryLower.contains('supermarket') && countryCode == 'AT') {
+		  fallbackTerms.addAll(['supermarkt', 'spar', 'billa']);
+		}
+		
+		return fallbackTerms;
+	  }
+	  
+	  // Final fallback - return original category
+	  return [category];
+	}
+
+	/// Search using Overpass API directly with OSM tags and AI-translated local terms
+	Future<List<AILocationResult>> _searchOverpassDirect(
+		String category, 
+		List<String> localTerms,
+		Map<String, List<String>> osmTags
+	) async {
+	  List<AILocationResult> results = [];
+	  
+	  if (_currentLatLng == null) return results;
+	  
+	  try {
+		print('🔍 OVERPASS: Searching for $category with tags: $osmTags');
+		print('🔍 OVERPASS: Using local terms: $localTerms');
+		
+		// Build Overpass query with multiple tag types AND name searches
+		final queryParts = <String>[];
+		
+		// Add OSM tag searches
+		for (final tagType in osmTags.keys) {
+		  for (final tagValue in osmTags[tagType]!) {
+			if (tagValue == '*') {
+			  // Special case for all values
+			  queryParts.add('node["$tagType"](around:1500,${_currentLatLng!.latitude},${_currentLatLng!.longitude});');
+			  queryParts.add('way["$tagType"](around:1500,${_currentLatLng!.latitude},${_currentLatLng!.longitude});');
+			} else {
+			  queryParts.add('node["$tagType"="$tagValue"](around:1500,${_currentLatLng!.latitude},${_currentLatLng!.longitude});');
+			  queryParts.add('way["$tagType"="$tagValue"](around:1500,${_currentLatLng!.latitude},${_currentLatLng!.longitude});');
+			}
+		  }
+		}
+		
+		// ADD NAME SEARCHES WITH LOCAL TERMS
+		for (final localTerm in localTerms) {
+		  // Parse comma-separated terms if AI returned them as one string
+		  final terms = localTerm.contains(',') 
+			  ? localTerm.split(',').map((t) => t.trim()).toList()
+			  : [localTerm];
+			  
+			for (final term in terms) {
+			  // Clean the term from any quotes
+			  final cleanTerm = term.replaceAll('"', '').replaceAll("'", '').trim();
+			  
+			  if (cleanTerm.isNotEmpty && cleanTerm.length > 2) {
+				// Search by name containing local term (case insensitive)
+				queryParts.add('node["name"~"$cleanTerm",i](around:1500,${_currentLatLng!.latitude},${_currentLatLng!.longitude});');
+				queryParts.add('way["name"~"$cleanTerm",i](around:1500,${_currentLatLng!.latitude},${_currentLatLng!.longitude});');
+				
+				print('🌐 NAME SEARCH: Adding name search for "$cleanTerm"');
+			  }
+			}
+		}
+		
+		final overpassQuery = '''
+	[out:json][timeout:10];
+	(
+	  ${queryParts.join('\n  ')}
+	);
+	out center meta;
+	''';
+
+		print('🔍 OVERPASS: Query = $overpassQuery');
+
+	// Fallback servers list
+	final servers = [
+	  'https://overpass-api.de/api/interpreter',
+	  'https://overpass.kumi.systems/api/interpreter', 
+	  'https://overpass.openstreetmap.ru/api/interpreter'
+	];
+
+	http.Response? response;
+	String? usedServer;
+
+	for (int i = 0; i < servers.length; i++) {
+	  final serverUrl = servers[i];
+	  print('🌐 TRYING SERVER ${i + 1}/${servers.length}: $serverUrl');
+	  
+	  try {
+		response = await http.post(
+		  Uri.parse(serverUrl),
+		  headers: {
+			'Content-Type': 'application/x-www-form-urlencoded',
+			'User-Agent': 'LocadoApp/1.0',
+		  },
+		  body: 'data=${Uri.encodeComponent(overpassQuery)}',
+		).timeout(Duration(seconds: 15));
+		
+		if (response.statusCode == 200) {
+		  usedServer = serverUrl;
+		  print('✅ SUCCESS with server: $usedServer');
+		  break;
+		} else {
+		  print('❌ Server returned status ${response.statusCode}, trying next...');
+		  response = null;
+		}
+	  } catch (e) {
+		print('❌ Server $serverUrl failed: $e, trying next...');
+		response = null;
+		continue;
+	  }
+	}
+
+	if (response == null) {
+	  print('❌ ALL SERVERS FAILED');
+	  return results;
+	}
+
+		if (response.statusCode == 200) {
+		  final data = jsonDecode(response.body);
+		  final elements = data['elements'] as List;
+
+		  print('🔍 OVERPASS: Found ${elements.length} raw results');
+
+		  // Use Set to avoid duplicates by coordinates
+		  final Set<String> addedCoordinates = {};
+
+		  for (final element in elements.take(50)) { // Increased from 30 to 50
+			final tags = element['tags'] as Map<String, dynamic>?;
+			if (tags == null) continue;
+
+			final name = tags['name'] ?? tags['brand'] ?? 'Unnamed ${category.toLowerCase()}';
+			
+			// Get coordinates
+			double lat, lng;
+			if (element['lat'] != null && element['lon'] != null) {
+			  lat = element['lat'].toDouble();
+			  lng = element['lon'].toDouble();
+			} else if (element['center'] != null) {
+			  lat = element['center']['lat'].toDouble();
+			  lng = element['center']['lon'].toDouble();
+			} else {
+			  continue;
+			}
+
+			// Create unique coordinate key to avoid duplicates
+			final coordKey = '${lat.toStringAsFixed(6)}_${lng.toStringAsFixed(6)}';
+			if (addedCoordinates.contains(coordKey)) {
+			  continue; // Skip duplicate location
+			}
+
+			// Calculate distance
+			final distance = Geolocator.distanceBetween(
+			  _currentLatLng!.latitude,
+			  _currentLatLng!.longitude,
+			  lat,
+			  lng,
+			);
+
+			// Only include nearby places (1.5km max)
+			if (distance <= 1500) {
+			  addedCoordinates.add(coordKey);
+			  
+			  // Generate task items from real OSM tags
+			  final taskItems = await _generateTaskItemsFromOSMTags(name, tags, category);
+
+			  results.add(AILocationResult(
+				name: name,
+				description: _getDescriptionFromOSMTags(tags, category),
+				coordinates: UniversalLatLng(lat, lng),
+				taskItems: taskItems,
+				category: _getCategoryFromOSMTags(tags),
+				distanceFromUser: distance,
+			  ));
+			  
+			  print('✅ OVERPASS: Added $name (${(distance / 1000).toStringAsFixed(2)}km)');
+			}
+		  }
+		} else {
+		  print('❌ OVERPASS: API returned status code ${response.statusCode}');
+		}
+		
+		// Sort by distance
+		results.sort((a, b) => a.distanceFromUser!.compareTo(b.distanceFromUser!));
+		
+		print('✅ OVERPASS: Final results: ${results.length}');
+		return results.take(25).toList(); // Increased from 20 to 25
+		
+	  } catch (e) {
+		print('❌ OVERPASS: Error = $e');
+		return results;
+	  }
+	}
+
+	/// Generate task items from OSM tags
+	Future<List<String>> _generateTaskItemsFromOSMTags(
+		String name, 
+		Map<String, dynamic> tags,
+		String category
+	) async {
+	  List<String> tasks = [];
+	  
+	  // Extract useful info from OSM tags
+	  final openingHours = tags['opening_hours'] ?? '';
+	  final phone = tags['phone'] ?? '';
+	  final website = tags['website'] ?? '';
+	  final wheelchairAccess = tags['wheelchair'] ?? '';
+	  final brand = tags['brand'] ?? '';
+	  
+	  // Category-specific tasks
+	  final categoryLower = category.toLowerCase();
+	  
+	  if (categoryLower.contains('pharmacy')) {
+		tasks.add('Get prescription medications');
+		tasks.add('Ask pharmacist for health advice');
+		if (openingHours.isNotEmpty) {
+		  tasks.add('Hours: $openingHours');
+		} else {
+		  tasks.add('Check opening hours before visiting');
+		}
+		tasks.add('Bring prescription and ID');
+	  } else if (categoryLower.contains('restaurant')) {
+		final cuisine = tags['cuisine'] ?? '';
+		if (cuisine.isNotEmpty) {
+		  tasks.add('Try their $cuisine specialties');
+		} else {
+		  tasks.add('Check menu and daily specials');
+		}
+		tasks.add('Make reservation if needed');
+		if (openingHours.isNotEmpty) {
+		  tasks.add('Hours: $openingHours');
+		}
+	  } else {
+		// Generic tasks
+		tasks.add('Visit and explore this location');
+		if (openingHours.isNotEmpty) {
+		  tasks.add('Hours: $openingHours');
+		} else {
+		  tasks.add('Check opening hours before visiting');
+		}
+	  }
+	  
+	  // Contact info
+	  if (phone.isNotEmpty) {
+		tasks.add('Call: $phone');
+	  }
+	  
+	  // Accessibility
+	  if (wheelchairAccess == 'yes') {
+		tasks.add('♿ Wheelchair accessible');
+	  }
+	  
+	  // Brand info
+	  if (brand.isNotEmpty && brand != name) {
+		tasks.add('Brand: $brand');
+	  }
+	  
+	  return tasks.take(5).toList();
+	}
+
+	/// Get description from OSM tags
+	String _getDescriptionFromOSMTags(Map<String, dynamic> tags, String category) {
+	  final brand = tags['brand'] ?? '';
+	  final cuisine = tags['cuisine'] ?? '';
+	  final openingHours = tags['opening_hours'] ?? '';
+	  
+	  if (category.toLowerCase().contains('pharmacy')) {
+		if (brand.isNotEmpty) {
+		  return '$brand pharmacy with medications and health products';
+		}
+		return 'Local pharmacy for medications and health advice';
+	  }
+	  
+	  if (category.toLowerCase().contains('restaurant')) {
+		if (cuisine.isNotEmpty && brand.isNotEmpty) {
+		  return '$brand restaurant serving $cuisine cuisine';
+		} else if (cuisine.isNotEmpty) {
+		  return 'Restaurant specializing in $cuisine cuisine';
+		} else if (brand.isNotEmpty) {
+		  return '$brand restaurant with quality food';
+		}
+		return 'Local restaurant with good food';
+	  }
+	  
+	  return 'Local ${category.toLowerCase()} nearby';
+	}
+
+	/// Get category from OSM tags
+	String _getCategoryFromOSMTags(Map<String, dynamic> tags) {
+	  if (tags['amenity'] != null) {
+		return tags['amenity'];
+	  }
+	  if (tags['shop'] != null) {
+		return tags['shop'];
+	  }
+	  if (tags['healthcare'] != null) {
+		return 'healthcare';
+	  }
+	  return 'location';
+	}
+
+	/// Main optimized quick search method
+	Future<void> _performOptimizedQuickSearch(String query) async {
+	  if (_openAIApiKey == 'YOUR_OPENAI_API_KEY_HERE') {
+		_showSnackBar('Please add your OpenAI API key', Colors.red);
+		return;
+	  }
+
+	  // Check network
+	  try {
+		await http.get(Uri.parse('https://www.google.com')).timeout(Duration(seconds: 3));
+	  } catch (e) {
+		_showSnackBar('No internet connection. Please check your network.', Colors.red);
+		return;
+	  }
+
+	  // Ensure we have location
+	  if (_currentLatLng == null) {
+		_showSnackBar('Getting your location, please wait...', Colors.orange);
+		await _getCurrentLocationPrecise();
+		if (_currentLatLng == null) {
+		  _showSnackBar('Could not get your location. Using default location.', Colors.orange);
+		}
+	  }
+
+	  setState(() {
+		_isLoading = true;
+		_searchResults.clear();
+		_hasSearched = false;
+	  });
+
+	  try {
+		print('🚀 OPTIMIZED SEARCH: Starting for "$query"');
+		
+		// Step 1: Get category-specific OSM tags
+		final osmTags = _getCategoryOSMTags(query);
+		print('🏷️ OSM TAGS: $osmTags');
+		
+		// Step 2: Get current country for translation
+		final countryCode = await _getCurrentCountryCode();
+		print('🌍 COUNTRY: $countryCode');
+		
+		// Step 3: Get local translations
+		final category = query.split(' ')[0]; // Get first word as category
+		final localTerms = await _translateCategoryToLocal(category, countryCode);
+		print('🌐 LOCAL TERMS: $localTerms');
+		
+		// Step 4: Direct Overpass search
+		final results = await _searchOverpassDirect(category, localTerms, osmTags);
+		
+		setState(() {
+		  _searchResults = results;
+		  _hasSearched = true;
+		  _isLoading = false;
+		});
+
+		if (_searchResults.isEmpty) {
+		  _showSnackBar('No ${category.toLowerCase()} found nearby. Try expanding search area.', Colors.blue);
+		} else {
+		  _showSnackBar('Found ${_searchResults.length} ${category.toLowerCase()} locations nearby', Colors.green);
+		}
+
+	  } catch (e, stackTrace) {
+		print('❌ OPTIMIZED SEARCH: ERROR = $e');
+		print('❌ OPTIMIZED SEARCH: STACK TRACE = $stackTrace');
+
+		setState(() {
+		  _isLoading = false;
+		  _hasSearched = true;
+		});
+		_showSnackBar('Search error: ${e.toString()}', Colors.red);
+	  }
+	}
+
+	// ==================== END OPTIMIZED QUICK SEARCH METHODS ====================
 
  @override
  Widget build(BuildContext context) {
