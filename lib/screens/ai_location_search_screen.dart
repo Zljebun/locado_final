@@ -183,6 +183,42 @@ class _AILocationSearchScreenState extends State<AILocationSearchScreen> {
         'color': Colors.pink,
         'query': 'shopping centers nearby',
       },
+		{
+		  'text': 'Nightlife & Bars',
+		  'icon': Icons.local_bar,
+		  'color': Colors.purple,
+		  'query': 'nightlife bars nearby',
+		},
+		{
+		  'text': 'Museums & Culture',
+		  'icon': Icons.museum,
+		  'color': Colors.indigo,
+		  'query': 'museums culture nearby',
+		},
+		{
+		  'text': 'Parks & Recreation',
+		  'icon': Icons.park,
+		  'color': Colors.green,
+		  'query': 'parks recreation nearby',
+		},
+		{
+		  'text': 'Entertainment',
+		  'icon': Icons.movie,
+		  'color': Colors.red,
+		  'query': 'entertainment cinema nearby',
+		},
+		{
+		  'text': 'Tourist Attractions',
+		  'icon': Icons.place,
+		  'color': Colors.orange,
+		  'query': 'tourist attractions nearby',
+		},
+		{
+		  'text': 'Kids Attractions',
+		  'icon': Icons.child_friendly,
+		  'color': Colors.pink,
+		  'query': 'kids attractions children nearby',
+		},
     ];
   }
 
@@ -2257,6 +2293,48 @@ Respond with ONLY this JSON format:
 		  'shop': ['mall', 'department_store', 'clothes', 'shoes']
 		};
 	  }
+	  
+		if (categoryLower.contains('nightlife') || categoryLower.contains('bar')) {
+		  return {
+			'amenity': ['bar', 'pub', 'nightclub', 'biergarten']
+		  };
+		}
+
+		if (categoryLower.contains('museum') || categoryLower.contains('culture')) {
+		  return {
+			'tourism': ['museum'],
+			'amenity': ['theatre', 'cinema']
+		  };
+		}
+
+		if (categoryLower.contains('park') || categoryLower.contains('recreation')) {
+		  return {
+			'leisure': ['park', 'playground', 'garden'],
+			'tourism': ['attraction']
+		  };
+		}
+
+		if (categoryLower.contains('entertainment') || categoryLower.contains('cinema')) {
+		  return {
+			'amenity': ['cinema', 'theatre'],
+			'leisure': ['bowling_alley', 'amusement_arcade']
+		  };
+		}
+
+		if (categoryLower.contains('tourist') || categoryLower.contains('attraction')) {
+		  return {
+			'tourism': ['attraction', 'viewpoint', 'monument', 'artwork']
+		  };
+		}
+		
+		if (categoryLower.contains('kids') || categoryLower.contains('children') || categoryLower.contains('child')) {
+		  return {
+			'leisure': ['playground', 'water_park', 'amusement_arcade'],
+			'tourism': ['zoo', 'theme_park'],
+			'amenity': ['kindergarten'],
+			'shop': ['toys']
+		  };
+		}
 	  
 	  // Default fallback
 	  return {
