@@ -2776,6 +2776,504 @@ Respond with ONLY this JSON format:
 	  
 	  return results;
 	}
+	
+	/// NEW METHOD: Enhanced rural search with Nominatim primary and Overpass fallback
+	Future<List<AILocationResult>> _searchRuralWithNominatimPrimary(
+		String category, 
+		List<String> localTerms,
+		Map<String, List<String>> osmTags,
+		List<String> availableServers
+	) async {
+	  List<AILocationResult> results = [];
+	  
+	  if (_currentLatLng == null) return results;
+	  
+	  try {
+		print('🌾 RURAL SEARCH: Starting with Nominatim primary for "$category"');
+		
+		// STEP 1: Try Nominatim first (primary method)
+		print('🏥 RURAL SEARCH: Primary - Nominatim search');
+		results = await _searchNominatimRural(category, localTerms);
+		
+		// STEP 2: If Nominatim found enough results, return them
+		if (results.length >= 5) {
+		  print('✅ RURAL SEARCH: Nominatim found ${results.length} results - using Nominatim results');
+		  return results;
+		}
+		
+		// STEP 3: If Nominatim didn't find enough, try Overpass as fallback
+		print('🌾 RURAL SEARCH: Nominatim found only ${results.length} results, trying Overpass fallback');
+		final overpassResults = await _searchOverpassRuralFallback(category, localTerms, osmTags, availableServers);
+		
+		// STEP 4: Compare results and use the better one
+		if (overpassResults.length > results.length) {
+		  print('✅ RURAL SEARCH: Overpass found more results (${overpassResults.length}), using Overpass results');
+		  results = overpassResults;
+		} else {
+		  print('✅ RURAL SEARCH: Keeping Nominatim results (${results.length} vs ${overpassResults.length})');
+		}
+		
+		return results;
+		
+	  } catch (e) {
+		print('❌ RURAL SEARCH: Error = $e');
+		return results;
+	  }
+	}
+
+	/// NEW METHOD: Overpass as fallback for rural search
+	Future<List<AILocationResult>> _searchOverpassRuralFallback(
+		String category, 
+		List<String> localTerms,
+		Map<String, List<String>> osmTags,
+		List<String> availableServers
+	) async {
+	  List<AILocationResult> results = [];
+	  
+	  if (_currentLatLng == null) return results;
+	  
+	  try {
+		print('🌾 OVERPASS FALLBACK: Starting progressive radius search for "$category"');
+		
+		// Progressive radius search: 3km → 5km → 10km → 15km → 20km
+		final List<double> ruralRadiuses = [3000, 5000, 10000, 15000, 20000]; // in meters
+		final List<double> ruralDistanceLimits = [3000, 5000, 10000, 15000, 20000]; // in meters
+		
+		// Use provided servers (already tested)
+		final servers = availableServers.isNotEmpty ? availableServers : _allServers;
+		
+		if (servers.isEmpty) {
+		  print('❌ OVERPASS FALLBACK: No available servers');
+		  return results;
+		}
+		
+		bool overpassWorking = false;
+		
+		// Try each radius until we find at least 5 results
+		for (int radiusIndex = 0; radiusIndex < ruralRadiuses.length; radiusIndex++) {
+		  final radiusMeters = ruralRadiuses[radiusIndex];
+		  final distanceLimit = ruralDistanceLimits[radiusIndex];
+		  final radiusKm = radiusMeters / 1000;
+		  
+		  print('🌾 OVERPASS FALLBACK: Trying radius ${radiusKm}km (${distanceLimit/1000}km distance limit)');
+		  
+		  // OPTIMIZED: Build simplified query for rural search to avoid timeouts
+		  final queryParts = <String>[];
+		  
+		  // Strategy 1: Only primary OSM tags (most reliable)
+		  if (osmTags['amenity'] != null) {
+			for (final tagValue in osmTags['amenity']!.take(2)) { // Limit to 2 most important tags
+			  if (tagValue != '*') {
+				queryParts.add('node["amenity"="$tagValue"](around:$radiusMeters,${_currentLatLng!.latitude},${_currentLatLng!.longitude});');
+				queryParts.add('way["amenity"="$tagValue"](around:$radiusMeters,${_currentLatLng!.latitude},${_currentLatLng!.longitude});');
+			  }
+			}
+		  }
+		  
+		  // Strategy 2: Add one primary local term search only (most common term)
+		  if (localTerms.isNotEmpty) {
+			final primaryTerm = localTerms[0].split(',')[0].trim(); // Get first term only
+			final cleanTerm = primaryTerm.replaceAll('"', '').replaceAll("'", '').trim();
+			
+			if (cleanTerm.isNotEmpty && cleanTerm.length > 2) {
+			  queryParts.add('node["name"~"$cleanTerm",i](around:$radiusMeters,${_currentLatLng!.latitude},${_currentLatLng!.longitude});');
+			  queryParts.add('way["name"~"$cleanTerm",i](around:$radiusMeters,${_currentLatLng!.latitude},${_currentLatLng!.longitude});');
+			  print('🌾 OVERPASS FALLBACK: Using primary term "$cleanTerm" for ${radiusKm}km search');
+			}
+		  }
+		  
+		  final overpassQuery = '''
+[out:json][timeout:8];
+(
+  ${queryParts.join('\n  ')}
+);
+out center meta;
+''';
+
+		  print('🌾 OVERPASS FALLBACK: Query for ${radiusKm}km radius');
+
+		  http.Response? response;
+		  String? usedServer;
+
+		  // Try servers in optimal order (but with shorter timeout)
+		  for (int i = 0; i < servers.length; i++) {
+			final serverUrl = servers[i];
+			print('🌐 OVERPASS FALLBACK: Trying server ${i + 1}/${servers.length}: $serverUrl');
+			
+			try {
+			  response = await http.post(
+				Uri.parse(serverUrl),
+				headers: {
+				  'Content-Type': 'application/x-www-form-urlencoded',
+				  'User-Agent': 'LocadoApp/1.0',
+				},
+				body: 'data=${Uri.encodeComponent(overpassQuery)}',
+			  ).timeout(Duration(seconds: 8)); // Short timeout for fallback
+			  
+			  if (response.statusCode == 200) {
+				usedServer = serverUrl;
+				overpassWorking = true;
+				print('✅ OVERPASS FALLBACK: Success with server: $usedServer');
+				break;
+			  } else {
+				print('❌ OVERPASS FALLBACK: Server returned status ${response.statusCode}, trying next...');
+				response = null;
+			  }
+			} catch (e) {
+			  print('❌ OVERPASS FALLBACK: Server $serverUrl failed: $e, trying next...');
+			  response = null;
+			  continue;
+			}
+		  }
+
+		  if (response == null) {
+			print('❌ OVERPASS FALLBACK: All servers failed for radius ${radiusKm}km');
+			continue; // Try next radius
+		  }
+
+		  // Process results for current radius
+		  if (response.statusCode == 200) {
+			final data = jsonDecode(response.body);
+			final elements = data['elements'] as List;
+
+			print('🌾 OVERPASS FALLBACK: Found ${elements.length} raw results for ${radiusKm}km radius');
+
+			// Use Set to avoid duplicates by coordinates
+			final Set<String> addedCoordinates = {};
+			List<AILocationResult> currentRadiusResults = [];
+
+			for (final element in elements.take(100)) { // Process more elements for rural search
+			  final tags = element['tags'] as Map<String, dynamic>?;
+			  if (tags == null) continue;
+
+			  final name = tags['name'] ?? tags['brand'] ?? 'Unnamed ${category.toLowerCase()}';
+			  
+			  // Get coordinates
+			  double lat, lng;
+			  if (element['lat'] != null && element['lon'] != null) {
+				lat = element['lat'].toDouble();
+				lng = element['lon'].toDouble();
+			  } else if (element['center'] != null) {
+				lat = element['center']['lat'].toDouble();
+				lng = element['center']['lon'].toDouble();
+			  } else {
+				continue;
+			  }
+
+			  // Create unique coordinate key to avoid duplicates
+			  final coordKey = '${lat.toStringAsFixed(6)}_${lng.toStringAsFixed(6)}';
+			  if (addedCoordinates.contains(coordKey)) {
+				continue;
+			  }
+
+			  // Calculate distance from user
+			  final distance = Geolocator.distanceBetween(
+				_currentLatLng!.latitude,
+				_currentLatLng!.longitude,
+				lat,
+				lng,
+			  );
+
+			  // Check if within current distance limit
+			  if (distance <= distanceLimit) {
+				addedCoordinates.add(coordKey);
+				
+				// Generate task items from real OSM tags
+				final taskItems = await _generateTaskItemsFromOSMTags(name, tags, category);
+
+				currentRadiusResults.add(AILocationResult(
+				  name: name,
+				  description: _getDescriptionFromOSMTags(tags, category),
+				  coordinates: UniversalLatLng(lat, lng),
+				  taskItems: taskItems,
+				  category: _getCategoryFromOSMTags(tags),
+				  distanceFromUser: distance,
+				));
+				
+				print('✅ OVERPASS FALLBACK: Added $name (${(distance/1000).toStringAsFixed(1)}km)');
+			  }
+			}
+			
+			// Sort current results by distance
+			currentRadiusResults.sort((a, b) => a.distanceFromUser!.compareTo(b.distanceFromUser!));
+			results = currentRadiusResults;
+			
+			print('🌾 OVERPASS FALLBACK: Radius ${radiusKm}km completed with ${results.length} results');
+			
+			// Check if we have enough results to stop
+			if (results.length >= 5) {
+			  print('✅ OVERPASS FALLBACK: Found ${results.length} results at ${radiusKm}km radius - stopping search');
+			  break; // Stop expanding radius
+			}
+		  }
+		}
+		
+		if (results.length < 5) {
+		  print('🌾 OVERPASS FALLBACK: Completed all radii up to 20km, found ${results.length} results');
+		} else {
+		  print('✅ OVERPASS FALLBACK: Successfully found ${results.length} results');
+		}
+		
+		// Return up to 25 results (same as other search methods)
+		return results.take(25).toList();
+		
+	  } catch (e) {
+		print('❌ OVERPASS FALLBACK: Error = $e');
+		return results;
+	  }
+	}
+	
+    /// NEW METHOD: Rural search using Nominatim as fallback when Overpass fails
+	Future<List<AILocationResult>> _searchNominatimRural(
+		String category, 
+		List<String> localTerms
+	) async {
+	  List<AILocationResult> results = [];
+	  
+	  if (_currentLatLng == null) return results;
+	  
+	  try {
+		print('🏥 NOMINATIM RURAL: Starting fallback search for "$category"');
+		
+		// Progressive radius search: 3km → 5km → 10km → 15km → 20km
+		final List<double> ruralRadiuses = [0.03, 0.05, 0.1, 0.15, 0.2]; // in decimal degrees (approx km)
+		final List<double> ruralDistanceLimits = [3000, 5000, 10000, 15000, 20000]; // in meters
+		
+		// Prepare search terms
+		final searchTerms = <String>[category]; // Start with English term
+		
+		// Add local terms
+		for (final localTerm in localTerms) {
+		  final terms = localTerm.contains(',') 
+			  ? localTerm.split(',').map((t) => t.trim()).toList()
+			  : [localTerm];
+		  
+		  for (final term in terms) {
+			final cleanTerm = term.replaceAll('"', '').replaceAll("'", '').trim();
+			if (cleanTerm.isNotEmpty && cleanTerm.length > 2) {
+			  searchTerms.add(cleanTerm);
+			}
+		  }
+		}
+		
+		// Remove duplicates
+		final uniqueSearchTerms = searchTerms.toSet().toList();
+		print('🏥 NOMINATIM RURAL: Search terms: $uniqueSearchTerms');
+		
+		// Try each radius until we find at least 5 results
+		for (int radiusIndex = 0; radiusIndex < ruralRadiuses.length; radiusIndex++) {
+		  final radiusDegrees = ruralRadiuses[radiusIndex];
+		  final distanceLimit = ruralDistanceLimits[radiusIndex];
+		  final radiusKm = distanceLimit / 1000;
+		  
+		  print('🏥 NOMINATIM RURAL: Trying radius ${radiusKm}km');
+		  
+		  List<AILocationResult> currentRadiusResults = [];
+		  final Set<String> addedCoordinates = {};
+		  
+		  // Search with each term
+		  for (final searchTerm in uniqueSearchTerms.take(5)) { // Limit to 5 terms to avoid too many requests
+			try {
+			  // Build Nominatim query with viewbox
+			  final url = 'https://nominatim.openstreetmap.org/search'
+				  '?q=${Uri.encodeComponent(searchTerm)}'
+				  '&format=json'
+				  '&addressdetails=1'
+				  '&limit=20' // More results for rural search
+				  '&lat=${_currentLatLng!.latitude}'
+				  '&lon=${_currentLatLng!.longitude}'
+				  '&bounded=1'
+				  '&viewbox=${_currentLatLng!.longitude - radiusDegrees},${_currentLatLng!.latitude + radiusDegrees},${_currentLatLng!.longitude + radiusDegrees},${_currentLatLng!.latitude - radiusDegrees}';
+
+			  print('🏥 NOMINATIM RURAL: Searching "$searchTerm" in ${radiusKm}km radius');
+
+			  final response = await http.get(
+				Uri.parse(url),
+				headers: {'User-Agent': 'LocadoApp/1.0'},
+			  ).timeout(Duration(seconds: 8));
+
+			  if (response.statusCode == 200) {
+				final List<dynamic> places = jsonDecode(response.body);
+				
+				for (final place in places.take(15)) { // Process up to 15 per term
+				  final lat = double.parse(place['lat']);
+				  final lng = double.parse(place['lon']);
+				  final name = place['display_name'] ?? 'Unknown Place';
+				  final type = place['type'] ?? 'location';
+				  
+				  // Create unique coordinate key to avoid duplicates
+				  final coordKey = '${lat.toStringAsFixed(6)}_${lng.toStringAsFixed(6)}';
+				  if (addedCoordinates.contains(coordKey)) {
+					continue;
+				  }
+				  
+				  // Calculate distance from user
+				  final distance = Geolocator.distanceBetween(
+					_currentLatLng!.latitude,
+					_currentLatLng!.longitude,
+					lat,
+					lng,
+				  );
+
+				  // Check if within distance limit
+				  if (distance <= distanceLimit) {
+					addedCoordinates.add(coordKey);
+					
+					final cleanName = _cleanDisplayName(name);
+					final taskItems = await _generateTaskItemsFromType(cleanName, type);
+
+					currentRadiusResults.add(AILocationResult(
+					  name: cleanName,
+					  description: 'Local $type in the area (${(distance/1000).toStringAsFixed(1)}km away)',
+					  coordinates: UniversalLatLng(lat, lng),
+					  taskItems: taskItems,
+					  category: type,
+					  distanceFromUser: distance,
+					));
+					
+					print('✅ NOMINATIM RURAL: Added $cleanName (${(distance/1000).toStringAsFixed(1)}km)');
+				  }
+				}
+			  } else {
+				print('❌ NOMINATIM RURAL: HTTP ${response.statusCode} for term "$searchTerm"');
+			  }
+			  
+			  // Small delay between requests to be respectful to Nominatim
+			  await Future.delayed(Duration(milliseconds: 200));
+			  
+			} catch (e) {
+			  print('❌ NOMINATIM RURAL: Error searching "$searchTerm": $e');
+			  continue;
+			}
+		  }
+		  
+		  // Sort current results by distance
+		  currentRadiusResults.sort((a, b) => a.distanceFromUser!.compareTo(b.distanceFromUser!));
+		  results = currentRadiusResults;
+		  
+		  print('🏥 NOMINATIM RURAL: Radius ${radiusKm}km completed with ${results.length} results');
+		  
+		  // Check if we have enough results to stop
+		  if (results.length >= 5) {
+			print('✅ NOMINATIM RURAL: Found ${results.length} results at ${radiusKm}km radius - stopping search');
+			break; // Stop expanding radius
+		  }
+		}
+		
+		if (results.length < 5) {
+		  print('🏥 NOMINATIM RURAL: Completed all radii up to 20km, found ${results.length} results');
+		} else {
+		  print('✅ NOMINATIM RURAL: Successfully found ${results.length} results');
+		}
+		
+		// Return up to 25 results (same as other search methods)
+		return results.take(25).toList();
+		
+	  } catch (e) {
+		print('❌ NOMINATIM RURAL: Error = $e');
+		return results;
+	  }
+	}
+
+	/// MODIFIED METHOD: Enhanced quick search with rural fallback
+    Future<void> _performOptimizedQuickSearch(String query) async {
+	  if (_openAIApiKey == 'YOUR_OPENAI_API_KEY_HERE') {
+		_showSnackBar('Please add your OpenAI API key', Colors.red);
+		return;
+	  }
+
+	  // Check network
+	  try {
+		await http.get(Uri.parse('https://www.google.com')).timeout(Duration(seconds: 3));
+	  } catch (e) {
+		_showSnackBar('No internet connection. Please check your network.', Colors.red);
+		return;
+	  }
+
+	  // Ensure we have location
+	  if (_currentLatLng == null) {
+		_showSnackBar('Getting your location, please wait...', Colors.orange);
+		await _getCurrentLocationPrecise();
+		if (_currentLatLng == null) {
+		  _showSnackBar('Could not get your location. Using default location.', Colors.orange);
+		}
+	  }
+
+	  setState(() {
+		_isLoading = true;
+		_searchResults.clear();
+		_hasSearched = false;
+	  });
+
+	  try {
+		print('🚀 OPTIMIZED SEARCH: Starting for "$query"');
+		
+		// Step 1: Get category-specific OSM tags
+		final osmTags = _getCategoryOSMTags(query);
+		print('🏷️ OSM TAGS: $osmTags');
+		
+		// Step 2: Get current country for translation
+		final countryCode = await _getCurrentCountryCode();
+		print('🌍 COUNTRY: $countryCode');
+		
+		// Step 3: Get local translations
+		final category = query.split(' ')[0]; // Get first word as category
+		final localTerms = await _translateCategoryToLocal(category, countryCode);
+		print('🌍 LOCAL TERMS: $localTerms');
+		
+		// Step 4: URBAN SEARCH (existing logic - unchanged)
+		print('🏙️ URBAN SEARCH: Starting with 1.5km radius');
+		
+		// Get optimal server order for both urban and rural search
+		final availableServers = await _getOptimalServerOrder();
+		print('🌐 SERVERS: Using ${availableServers.length} available servers');
+		
+		List<AILocationResult> results = await _searchOverpassDirect(category, localTerms, osmTags);
+		
+		// Step 5: RURAL SEARCH (new logic - only if urban search finds <5 results)
+		if (results.length < 5) {
+		  print('🌾 RURAL SEARCH: Urban search found only ${results.length} results, starting rural search');
+		  final ruralResults = await _searchRuralWithNominatimPrimary(category, localTerms, osmTags, availableServers);
+		  
+		  if (ruralResults.length >= 5) {
+			print('✅ RURAL SEARCH: Found ${ruralResults.length} results, replacing urban results');
+			results = ruralResults;
+		  } else {
+			print('⚠️ RURAL SEARCH: Found only ${ruralResults.length} results, keeping urban results');
+			// Keep urban results even if <5, as they might be closer
+			if (ruralResults.length > results.length) {
+			  results = ruralResults;
+			}
+		  }
+		} else {
+		  print('✅ URBAN SEARCH: Found ${results.length} results, no need for rural search');
+		}
+		
+		setState(() {
+		  _searchResults = results;
+		  _hasSearched = true;
+		  _isLoading = false;
+		});
+
+		if (_searchResults.isEmpty) {
+		  _showSnackBar('No ${category.toLowerCase()} found in the area. Try expanding search manually.', Colors.blue);
+		} else {
+		  final searchType = results.length >= 5 && results.any((r) => r.distanceFromUser != null && r.distanceFromUser! > 1500) 
+			  ? 'expanded area' : 'nearby';
+		  _showSnackBar('Found ${_searchResults.length} ${category.toLowerCase()} locations in $searchType', Colors.green);
+		}
+
+	  } catch (e, stackTrace) {
+		print('❌ OPTIMIZED SEARCH: ERROR = $e');
+		print('❌ OPTIMIZED SEARCH: STACK TRACE = $stackTrace');
+
+		setState(() {
+		  _isLoading = false;
+		  _hasSearched = true;
+		});
+		_showSnackBar('Search error: ${e.toString()}', Colors.red);
+	  }
+	}
 
 	/// Generate task items from OSM tags
 	Future<List<String>> _generateTaskItemsFromOSMTags(
@@ -2884,78 +3382,6 @@ Respond with ONLY this JSON format:
 	  return 'location';
 	}
 
-	/// Main optimized quick search method
-	Future<void> _performOptimizedQuickSearch(String query) async {
-	  if (_openAIApiKey == 'YOUR_OPENAI_API_KEY_HERE') {
-		_showSnackBar('Please add your OpenAI API key', Colors.red);
-		return;
-	  }
-
-	  // Check network
-	  try {
-		await http.get(Uri.parse('https://www.google.com')).timeout(Duration(seconds: 3));
-	  } catch (e) {
-		_showSnackBar('No internet connection. Please check your network.', Colors.red);
-		return;
-	  }
-
-	  // Ensure we have location
-	  if (_currentLatLng == null) {
-		_showSnackBar('Getting your location, please wait...', Colors.orange);
-		await _getCurrentLocationPrecise();
-		if (_currentLatLng == null) {
-		  _showSnackBar('Could not get your location. Using default location.', Colors.orange);
-		}
-	  }
-
-	  setState(() {
-		_isLoading = true;
-		_searchResults.clear();
-		_hasSearched = false;
-	  });
-
-	  try {
-		print('🚀 OPTIMIZED SEARCH: Starting for "$query"');
-		
-		// Step 1: Get category-specific OSM tags
-		final osmTags = _getCategoryOSMTags(query);
-		print('🏷️ OSM TAGS: $osmTags');
-		
-		// Step 2: Get current country for translation
-		final countryCode = await _getCurrentCountryCode();
-		print('🌍 COUNTRY: $countryCode');
-		
-		// Step 3: Get local translations
-		final category = query.split(' ')[0]; // Get first word as category
-		final localTerms = await _translateCategoryToLocal(category, countryCode);
-		print('🌐 LOCAL TERMS: $localTerms');
-		
-		// Step 4: Direct Overpass search
-		final results = await _searchOverpassDirect(category, localTerms, osmTags);
-		
-		setState(() {
-		  _searchResults = results;
-		  _hasSearched = true;
-		  _isLoading = false;
-		});
-
-		if (_searchResults.isEmpty) {
-		  _showSnackBar('No ${category.toLowerCase()} found nearby. Try expanding search area.', Colors.blue);
-		} else {
-		  _showSnackBar('Found ${_searchResults.length} ${category.toLowerCase()} locations nearby', Colors.green);
-		}
-
-	  } catch (e, stackTrace) {
-		print('❌ OPTIMIZED SEARCH: ERROR = $e');
-		print('❌ OPTIMIZED SEARCH: STACK TRACE = $stackTrace');
-
-		setState(() {
-		  _isLoading = false;
-		  _hasSearched = true;
-		});
-		_showSnackBar('Search error: ${e.toString()}', Colors.red);
-	  }
-	}
 
 	// ==================== END OPTIMIZED QUICK SEARCH METHODS ====================
 
