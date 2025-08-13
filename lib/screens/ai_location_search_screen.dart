@@ -2461,9 +2461,6 @@ Respond with ONLY this JSON format:
 	  return [category];
 	}
 
-	// Cache za server health - vrijedi 5 minuta
-	Map<String, ServerHealth> _serverHealthCache = {};
-	static const Duration _healthCacheDuration = Duration(minutes: 5);
 
 	// Lista svih servera
 	List<String> get _allServers => [
@@ -2471,7 +2468,9 @@ Respond with ONLY this JSON format:
 	  'https://overpass.kumi.systems/api/interpreter', 
 	  'https://overpass.openstreetmap.ru/api/interpreter',
 	  'https://overpass.openstreetmap.fr/api/interpreter',
-	  'https://overpass.nchc.org.tw/api/interpreter'
+	  'https://z.overpass-api.de/api/interpreter',
+	  'https://lz4.overpass-api.de/api/interpreter',
+	  'https://maps.mail.ru/osm/tools/overpass/api/interpreter'
 	];
 
 	// Testira jedan server
@@ -2532,35 +2531,12 @@ Respond with ONLY this JSON format:
 	Future<List<String>> _getOptimalServerOrder() async {
 	  print('🔍 HEALTH CHECK: Testing all servers...');
 	  
-	  // Provjeri cache prvo
-	  final now = DateTime.now();
-	  bool cacheValid = _serverHealthCache.isNotEmpty && 
-		_serverHealthCache.values.every((health) => 
-		  now.difference(health.checkedAt) < _healthCacheDuration
-		);
-	  
-	  if (cacheValid) {
-		print('📋 HEALTH CHECK: Using cached results');
-		final sortedServers = _serverHealthCache.values
-			.where((health) => health.isAvailable)
-			.toList()
-		  ..sort((a, b) => a.responseTimeMs.compareTo(b.responseTimeMs));
-		
-		return sortedServers.map((health) => health.url).toList();
-	  }
-	  
 	  // Testiraj sve servere paralelno
 	  final futures = _allServers.map(_testSingleServer).toList();
 	  
 	  try {
 		// Čekaj maximum 4 sekunde za sve testove
 		final results = await Future.wait(futures).timeout(Duration(seconds: 4));
-		
-		// Spremi u cache
-		_serverHealthCache.clear();
-		for (final result in results) {
-		  _serverHealthCache[result.url] = result;
-		}
 		
 		// Sortiraj po brzini - dostupni serveri prvo
 		final availableServers = results
@@ -2686,7 +2662,40 @@ Respond with ONLY this JSON format:
 
 		if (response == null) {
 		  print('❌ ALL OPTIMAL SERVERS FAILED');
-		  return results;
+		  print('🔄 FALLBACK: Trying original server order...');
+		  
+		  // FALLBACK: pokušaj sa svim originalnim serverima
+		  for (int i = 0; i < _allServers.length; i++) {
+			final serverUrl = _allServers[i];
+			print('🌐 FALLBACK SERVER ${i + 1}/${_allServers.length}: $serverUrl');
+			
+			try {
+			  response = await http.post(
+				Uri.parse(serverUrl),
+				headers: {
+				  'Content-Type': 'application/x-www-form-urlencoded',
+				  'User-Agent': 'LocadoApp/1.0',
+				},
+				body: 'data=${Uri.encodeComponent(overpassQuery)}',
+			  ).timeout(Duration(seconds: 15)); // Duži timeout za fallback
+			  
+			  if (response.statusCode == 200) {
+				print('✅ FALLBACK SUCCESS with: $serverUrl');
+				break;
+			  } else {
+				response = null;
+			  }
+			} catch (e) {
+			  print('❌ Fallback server $serverUrl failed: $e');
+			  response = null;
+			  continue;
+			}
+		  }
+		  
+		  if (response == null) {
+			print('❌ ALL SERVERS FAILED (including fallback)');
+			return results;
+		  }
 		}
 
 		// Ostatak processing koda ostaje isti...
