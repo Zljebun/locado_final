@@ -13,6 +13,21 @@ import '../location_service.dart';
 import '../widgets/osm_map_widget.dart';
 import 'dart:math';
 
+// Server health check result
+class ServerHealth {
+  final String url;
+  final bool isAvailable;
+  final int responseTimeMs;
+  final DateTime checkedAt;
+
+  ServerHealth({
+	required this.url,
+	required this.isAvailable,
+	required this.responseTimeMs,
+	required this.checkedAt,
+  });
+}
+
 // Enum for map provider selection
 enum MapProvider { googleMaps, openStreetMap }
 
@@ -2446,6 +2461,125 @@ Respond with ONLY this JSON format:
 	  return [category];
 	}
 
+	// Cache za server health - vrijedi 5 minuta
+	Map<String, ServerHealth> _serverHealthCache = {};
+	static const Duration _healthCacheDuration = Duration(minutes: 5);
+
+	// Lista svih servera
+	List<String> get _allServers => [
+	  'https://overpass-api.de/api/interpreter',
+	  'https://overpass.kumi.systems/api/interpreter', 
+	  'https://overpass.openstreetmap.ru/api/interpreter',
+	  'https://overpass.openstreetmap.fr/api/interpreter',
+	  'https://overpass.nchc.org.tw/api/interpreter'
+	];
+
+	// Testira jedan server
+	Future<ServerHealth> _testSingleServer(String serverUrl) async {
+	  final stopwatch = Stopwatch()..start();
+	  
+	  try {
+		// Pošalji minimalni test query
+		const testQuery = '''
+		[out:json][timeout:3];
+		(
+		  node["amenity"="restaurant"](around:100,48.2082,16.3738);
+		);
+		out center 1;
+		''';
+
+		final response = await http.post(
+		  Uri.parse(serverUrl),
+		  headers: {
+			'Content-Type': 'application/x-www-form-urlencoded',
+			'User-Agent': 'LocadoApp/1.0',
+		  },
+		  body: 'data=${Uri.encodeComponent(testQuery)}',
+		).timeout(Duration(seconds: 3)); // Kratak timeout za test
+		
+		stopwatch.stop();
+		
+		if (response.statusCode == 200) {
+		  print('✅ SERVER TEST: $serverUrl - ${stopwatch.elapsedMilliseconds}ms');
+		  return ServerHealth(
+			url: serverUrl,
+			isAvailable: true,
+			responseTimeMs: stopwatch.elapsedMilliseconds,
+			checkedAt: DateTime.now(),
+		  );
+		} else {
+		  print('❌ SERVER TEST: $serverUrl - Status ${response.statusCode}');
+		  return ServerHealth(
+			url: serverUrl,
+			isAvailable: false,
+			responseTimeMs: -1,
+			checkedAt: DateTime.now(),
+		  );
+		}
+	  } catch (e) {
+		stopwatch.stop();
+		print('❌ SERVER TEST: $serverUrl - Error: $e');
+		return ServerHealth(
+		  url: serverUrl,
+		  isAvailable: false,
+		  responseTimeMs: -1,
+		  checkedAt: DateTime.now(),
+		);
+	  }
+	}
+
+	// Testira sve servere paralelno
+	Future<List<String>> _getOptimalServerOrder() async {
+	  print('🔍 HEALTH CHECK: Testing all servers...');
+	  
+	  // Provjeri cache prvo
+	  final now = DateTime.now();
+	  bool cacheValid = _serverHealthCache.isNotEmpty && 
+		_serverHealthCache.values.every((health) => 
+		  now.difference(health.checkedAt) < _healthCacheDuration
+		);
+	  
+	  if (cacheValid) {
+		print('📋 HEALTH CHECK: Using cached results');
+		final sortedServers = _serverHealthCache.values
+			.where((health) => health.isAvailable)
+			.toList()
+		  ..sort((a, b) => a.responseTimeMs.compareTo(b.responseTimeMs));
+		
+		return sortedServers.map((health) => health.url).toList();
+	  }
+	  
+	  // Testiraj sve servere paralelno
+	  final futures = _allServers.map(_testSingleServer).toList();
+	  
+	  try {
+		// Čekaj maximum 4 sekunde za sve testove
+		final results = await Future.wait(futures).timeout(Duration(seconds: 4));
+		
+		// Spremi u cache
+		_serverHealthCache.clear();
+		for (final result in results) {
+		  _serverHealthCache[result.url] = result;
+		}
+		
+		// Sortiraj po brzini - dostupni serveri prvo
+		final availableServers = results
+			.where((health) => health.isAvailable)
+			.toList()
+		  ..sort((a, b) => a.responseTimeMs.compareTo(b.responseTimeMs));
+		
+		final serverOrder = availableServers.map((health) => health.url).toList();
+		
+		print('🚀 HEALTH CHECK: Optimal order: ${availableServers.map((s) => "${s.url.split('/')[2]} (${s.responseTimeMs}ms)").join(", ")}');
+		
+		return serverOrder;
+		
+	  } catch (e) {
+		print('❌ HEALTH CHECK: Failed, using default order: $e');
+		return _allServers; // Fallback na originalni redoslijed
+	  }
+	}
+
 	/// Search using Overpass API directly with OSM tags and AI-translated local terms
 	Future<List<AILocationResult>> _searchOverpassDirect(
 		String category, 
@@ -2457,13 +2591,22 @@ Respond with ONLY this JSON format:
 	  if (_currentLatLng == null) return results;
 	  
 	  try {
-		print('🔍 OVERPASS: Searching for $category with tags: $osmTags');
-		print('🔍 OVERPASS: Using local terms: $localTerms');
+		print('🚀 OPTIMIZED SEARCH: Starting for "$category"');
 		
-		// Build Overpass query with multiple tag types AND name searches
+		// NOVO: Dobij optimalni redoslijed servera
+		final servers = await _getOptimalServerOrder();
+		
+		if (servers.isEmpty) {
+		  print('❌ OVERPASS: No available servers found');
+		  return results;
+		}
+		
+		print('🏷️ OSM TAGS: $osmTags');
+		print('🌐 LOCAL TERMS: $localTerms');
+		
+		// Ostatak koda ostaje isti, samo koristi 'servers' umjesto hardcoded liste
 		final queryParts = <String>[];
 		
-		// Add OSM tag searches
 		for (final tagType in osmTags.keys) {
 		  for (final tagValue in osmTags[tagType]!) {
 			if (tagValue == '*') {
@@ -2476,7 +2619,7 @@ Respond with ONLY this JSON format:
 			}
 		  }
 		}
-		
+
 		// ADD NAME SEARCHES WITH LOCAL TERMS
 		for (final localTerm in localTerms) {
 		  // Parse comma-separated terms if AI returned them as one string
@@ -2508,50 +2651,45 @@ Respond with ONLY this JSON format:
 
 		print('🔍 OVERPASS: Query = $overpassQuery');
 
-	// Fallback servers list
-	final servers = [
-	  'https://overpass-api.de/api/interpreter',
-	  'https://overpass.kumi.systems/api/interpreter', 
-	  'https://overpass.openstreetmap.ru/api/interpreter'
-	];
+		http.Response? response;
+		String? usedServer;
 
-	http.Response? response;
-	String? usedServer;
-
-	for (int i = 0; i < servers.length; i++) {
-	  final serverUrl = servers[i];
-	  print('🌐 TRYING SERVER ${i + 1}/${servers.length}: $serverUrl');
-	  
-	  try {
-		response = await http.post(
-		  Uri.parse(serverUrl),
-		  headers: {
-			'Content-Type': 'application/x-www-form-urlencoded',
-			'User-Agent': 'LocadoApp/1.0',
-		  },
-		  body: 'data=${Uri.encodeComponent(overpassQuery)}',
-		).timeout(Duration(seconds: 15));
-		
-		if (response.statusCode == 200) {
-		  usedServer = serverUrl;
-		  print('✅ SUCCESS with server: $usedServer');
-		  break;
-		} else {
-		  print('❌ Server returned status ${response.statusCode}, trying next...');
-		  response = null;
+		// Koristi optimizovani redoslijed servera
+		for (int i = 0; i < servers.length; i++) {
+		  final serverUrl = servers[i];
+		  print('🌐 TRYING OPTIMAL SERVER ${i + 1}/${servers.length}: $serverUrl');
+		  
+		  try {
+			response = await http.post(
+			  Uri.parse(serverUrl),
+			  headers: {
+				'Content-Type': 'application/x-www-form-urlencoded',
+				'User-Agent': 'LocadoApp/1.0',
+			  },
+			  body: 'data=${Uri.encodeComponent(overpassQuery)}',
+			).timeout(Duration(seconds: 8)); // Skraćen timeout jer znamo da server radi
+			
+			if (response.statusCode == 200) {
+			  usedServer = serverUrl;
+			  print('✅ SUCCESS with optimal server: $usedServer');
+			  break;
+			} else {
+			  print('❌ Server returned status ${response.statusCode}, trying next...');
+			  response = null;
+			}
+		  } catch (e) {
+			print('❌ Server $serverUrl failed: $e, trying next...');
+			response = null;
+			continue;
+		  }
 		}
-	  } catch (e) {
-		print('❌ Server $serverUrl failed: $e, trying next...');
-		response = null;
-		continue;
-	  }
-	}
 
-	if (response == null) {
-	  print('❌ ALL SERVERS FAILED');
-	  return results;
-	}
+		if (response == null) {
+		  print('❌ ALL OPTIMAL SERVERS FAILED');
+		  return results;
+		}
 
+		// Ostatak processing koda ostaje isti...
 		if (response.statusCode == 200) {
 		  final data = jsonDecode(response.body);
 		  final elements = data['elements'] as List;
@@ -2561,7 +2699,7 @@ Respond with ONLY this JSON format:
 		  // Use Set to avoid duplicates by coordinates
 		  final Set<String> addedCoordinates = {};
 
-		  for (final element in elements.take(50)) { // Increased from 30 to 50
+		  for (final element in elements.take(50)) {
 			final tags = element['tags'] as Map<String, dynamic>?;
 			if (tags == null) continue;
 
@@ -2582,7 +2720,7 @@ Respond with ONLY this JSON format:
 			// Create unique coordinate key to avoid duplicates
 			final coordKey = '${lat.toStringAsFixed(6)}_${lng.toStringAsFixed(6)}';
 			if (addedCoordinates.contains(coordKey)) {
-			  continue; // Skip duplicate location
+			  continue;
 			}
 
 			// Calculate distance
@@ -2615,17 +2753,19 @@ Respond with ONLY this JSON format:
 		} else {
 		  print('❌ OVERPASS: API returned status code ${response.statusCode}');
 		}
-		
+
 		// Sort by distance
 		results.sort((a, b) => a.distanceFromUser!.compareTo(b.distanceFromUser!));
-		
+
 		print('✅ OVERPASS: Final results: ${results.length}');
-		return results.take(25).toList(); // Increased from 20 to 25
+		return results.take(25).toList();
 		
 	  } catch (e) {
 		print('❌ OVERPASS: Error = $e');
 		return results;
 	  }
+	  
+	  return results;
 	}
 
 	/// Generate task items from OSM tags
