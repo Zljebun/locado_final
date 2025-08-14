@@ -107,6 +107,7 @@ class _AILocationSearchScreenState extends State<AILocationSearchScreen> {
   bool _isLoading = false;
   bool _hasSearched = false;
   bool _isLoadingLocation = false;
+  bool _isEnhancing = false;
 
   // Map provider selection
   MapProvider _currentMapProvider = MapProvider.googleMaps;
@@ -237,11 +238,22 @@ class _AILocationSearchScreenState extends State<AILocationSearchScreen> {
     ];
   }
 
-  // Method for quick search with hint
-  Future<void> _performQuickSearch(String query) async {
-    _searchController.text = query;
-    await _performOptimizedQuickSearch(query);
-  }
+	  // Method for quick search with hint
+	Future<void> _performQuickSearch(String query) async {
+		  _searchController.text = query;
+		  await _performOptimizedQuickSearchProgressive(query); // Changed from _performOptimizedQuickSearch
+		}
+
+		/// UPDATED METHOD: Replace existing _performAISearch call  
+		Future<void> _performAISearch() async {
+		  final query = _searchController.text.trim();
+		  if (query.isEmpty) {
+			_showSnackBar('Please enter a search query', Colors.orange);
+			return;
+		  }
+
+		  await _performOptimizedQuickSearchProgressive(query); // Changed from _performOptimizedQuickSearch
+		}
 
   // ENHANCED - uses same LocationService as HomeMapScreen
   Future<void> _getCurrentLocationPrecise() async {
@@ -1349,87 +1361,7 @@ Return only a JSON array, no other text.''';
     return aiResults.cast<Map<String, dynamic>>();
   }
 
-  Future<void> _performAISearch() async {
-    final query = _searchController.text.trim();
-    if (query.isEmpty) {
-      _showSnackBar('Please enter a search query', Colors.orange);
-      return;
-    }
 
-    if (_openAIApiKey == 'YOUR_OPENAI_API_KEY_HERE') {
-      _showSnackBar('Please add your OpenAI API key', Colors.red);
-      return;
-    }
-
-    // CHECK NETWORK FIRST
-    try {
-      await http.get(Uri.parse('https://www.google.com')).timeout(Duration(seconds: 3));
-    } catch (e) {
-      _showSnackBar('No internet connection. Please check your network.', Colors.red);
-      return;
-    }
-
-    // ENSURE WE HAVE USER LOCATION
-    if (_currentLatLng == null) {
-      _showSnackBar('Getting your location, please wait...', Colors.orange);
-      await _getCurrentLocationPrecise();
-      if (_currentLatLng == null) {
-        _showSnackBar('Could not get your location. Using default location.', Colors.orange);
-      }
-    }
-
-    setState(() {
-      _isLoading = true;
-      _searchResults.clear();
-      _hasSearched = false;
-    });
-
-    try {
-      // STEP 1: DETECT SEARCH INTENT
-      print('🎯 SEARCH INTENT: Starting intent detection for "$query"');
-      final searchIntent = await _detectSearchIntent(query);
-
-      print('🎯 SEARCH INTENT: Result = isLocal: ${searchIntent.isLocalSearch}, targetLocation: ${searchIntent.targetLocation}');
-
-      List<AILocationResult> results = [];
-
-		if (searchIntent.isLocalSearch) {
-		  // NEARBY SEARCH - use NEW expanded search logic
-		  print('📍 NEARBY SEARCH: Using current location with expanded terms');
-		  results = await _performExpandedNearbySearch(searchIntent.cleanQuery);
-		  _showSnackBar('Found ${results.length} nearby locations', Colors.green);
-		} else {
-		  // SPECIFIC LOCATION SEARCH
-		  print('🌍 LOCATION SEARCH: Searching in ${searchIntent.targetLocation}');
-		  results = await _performSpecificLocationSearch(
-			  searchIntent.cleanQuery,
-			  searchIntent.targetLocation!
-		  );
-		  _showSnackBar('Found ${results.length} locations in ${searchIntent.targetLocation}', Colors.green);
-		}
-
-      setState(() {
-        _searchResults = results;
-        _hasSearched = true;
-        _isLoading = false;
-      });
-
-      if (_searchResults.isEmpty) {
-        final locationMsg = searchIntent.isLocalSearch ? 'nearby' : 'in ${searchIntent.targetLocation}';
-        _showSnackBar('No locations found $locationMsg. Try a broader search.', Colors.blue);
-      }
-
-    } catch (e, stackTrace) {
-      print('❌ AI SEARCH: ERROR = $e');
-      print('❌ AI SEARCH: STACK TRACE = $stackTrace');
-
-      setState(() {
-        _isLoading = false;
-        _hasSearched = true;
-      });
-      _showSnackBar('Search error: ${e.toString()}', Colors.red);
-    }
-  }
 
 	// Search for locations in a specific city/location
 	Future<List<AILocationResult>> _performSpecificLocationSearch(String query, String targetLocation) async {
@@ -2132,6 +2064,377 @@ Future<SearchIntent> _detectSearchIntent(String originalQuery) async {
     originalQuery: originalQuery,
   );
 }
+
+/// UPDATED METHOD: Progressive search with immediate Nominatim + background Overpass
+	Future<void> _performOptimizedQuickSearchProgressive(String query) async {
+	  if (_openAIApiKey == 'YOUR_OPENAI_API_KEY_HERE') {
+		_showSnackBar('Please add your OpenAI API key', Colors.red);
+		return;
+	  }
+
+	  // Check network
+	  try {
+		await http.get(Uri.parse('https://www.google.com')).timeout(Duration(seconds: 3));
+	  } catch (e) {
+		_showSnackBar('No internet connection. Please check your network.', Colors.red);
+		return;
+	  }
+
+	  // Ensure we have location
+	  if (_currentLatLng == null) {
+		_showSnackBar('Getting your location, please wait...', Colors.orange);
+		await _getCurrentLocationPrecise();
+		if (_currentLatLng == null) {
+		  _showSnackBar('Could not get your location. Using default location.', Colors.orange);
+		}
+	  }
+
+	  setState(() {
+		_isLoading = true;
+		_searchResults.clear();
+		_hasSearched = false;
+		_isEnhancing = false;
+	  });
+
+	  try {
+		print('🚀 PROGRESSIVE SEARCH: Starting for "$query"');
+		
+		// Step 1: Get category-specific data
+		final osmTags = _getCategoryOSMTags(query);
+		final countryCode = await _getCurrentCountryCode();
+		final category = query.split(' ')[0];
+		final localTerms = await _translateCategoryToLocal(category, countryCode);
+		
+		print('🏷️ OSM TAGS: $osmTags');
+		print('🌍 LOCAL TERMS: $localTerms');
+		
+		// Step 2: PHASE 1 - Quick Nominatim search for immediate results
+		print('⚡ PHASE 1: Quick Nominatim search for immediate results');
+		List<AILocationResult> nominatimResults = await _searchNominatimQuick(category, localTerms, query);
+		
+		// Step 3: Show immediate results to user
+		setState(() {
+		  _searchResults = nominatimResults;
+		  _hasSearched = true;
+		  _isLoading = false;
+		  _isEnhancing = nominatimResults.isNotEmpty; // Show enhancement indicator if we have results
+		});
+
+		if (nominatimResults.isNotEmpty) {
+		  _showSnackBar('Found ${nominatimResults.length} locations, enhancing with detailed data...', Colors.blue);
+		} else {
+		  _showSnackBar('No locations found nearby', Colors.orange);
+		}
+		
+		// Step 4: PHASE 2 - Background Overpass enhancement (don't await - runs in background)
+		if (nominatimResults.isNotEmpty) {
+		  _enhanceWithOverpassInBackground(category, localTerms, osmTags, nominatimResults);
+		} else {
+		  // If Nominatim found nothing, try rural search as fallback
+		  _tryRuralSearchFallback(category, localTerms, osmTags);
+		}
+
+	  } catch (e, stackTrace) {
+		print('❌ PROGRESSIVE SEARCH: ERROR = $e');
+		print('❌ PROGRESSIVE SEARCH: STACK TRACE = $stackTrace');
+
+		setState(() {
+		  _isLoading = false;
+		  _hasSearched = true;
+		  _isEnhancing = false;
+		});
+		_showSnackBar('Search error: ${e.toString()}', Colors.red);
+	  }
+	}
+
+	/// NEW METHOD: Quick Nominatim search for both urban and rural areas
+	Future<List<AILocationResult>> _searchNominatimQuick(String category, List<String> localTerms, String originalQuery) async {
+	  if (_currentLatLng == null) return [];
+	  
+	  try {
+		print('⚡ NOMINATIM QUICK: Starting fast search for "$category"');
+		
+		// Determine if it's a local search
+		final isLocalSearch = originalQuery.toLowerCase().contains('nearby') ||
+			originalQuery.toLowerCase().contains('around') ||
+			originalQuery.toLowerCase().contains('close') ||
+			originalQuery.toLowerCase().contains('near me') ||
+			originalQuery.toLowerCase().contains('in the area');
+		
+		// Start with small radius and expand if needed
+		final radiusList = isLocalSearch 
+			? [0.02, 0.05, 0.1] // Urban focus: 2km, 5km, 10km
+			: [0.05, 0.1, 0.2]; // Broader search: 5km, 10km, 20km
+		
+		final distanceLimits = isLocalSearch
+			? [2000, 5000, 10000] // meters
+			: [5000, 10000, 20000]; // meters
+		
+		// Prepare search terms
+		final searchTerms = <String>[category];
+		for (final localTerm in localTerms) {
+		  final terms = localTerm.contains(',') 
+			  ? localTerm.split(',').map((t) => t.trim()).toList()
+			  : [localTerm];
+		  
+		  for (final term in terms) {
+			final cleanTerm = term.replaceAll('"', '').replaceAll("'", '').trim();
+			if (cleanTerm.isNotEmpty && cleanTerm.length > 2) {
+			  searchTerms.add(cleanTerm);
+			}
+		  }
+		}
+		
+		final uniqueSearchTerms = searchTerms.toSet().take(4).toList(); // Limit to 4 terms for speed
+		print('⚡ NOMINATIM QUICK: Search terms: $uniqueSearchTerms');
+		
+		List<AILocationResult> results = [];
+		final Set<String> addedCoordinates = {};
+		
+		// Try each radius until we find enough results
+		for (int radiusIndex = 0; radiusIndex < radiusList.length; radiusIndex++) {
+		  final radiusDegrees = radiusList[radiusIndex];
+		  final distanceLimit = distanceLimits[radiusIndex];
+		  final radiusKm = distanceLimit / 1000;
+		  
+		  print('⚡ NOMINATIM QUICK: Trying radius ${radiusKm}km');
+		  
+		  // Search with each term
+		  for (final searchTerm in uniqueSearchTerms) {
+			try {
+			  final url = 'https://nominatim.openstreetmap.org/search'
+				  '?q=${Uri.encodeComponent(searchTerm)}'
+				  '&format=json'
+				  '&addressdetails=1'
+				  '&limit=15'
+				  '&lat=${_currentLatLng!.latitude}'
+				  '&lon=${_currentLatLng!.longitude}'
+				  '&bounded=1'
+				  '&viewbox=${_currentLatLng!.longitude - radiusDegrees},${_currentLatLng!.latitude + radiusDegrees},${_currentLatLng!.longitude + radiusDegrees},${_currentLatLng!.latitude - radiusDegrees}';
+
+			  final response = await http.get(
+				Uri.parse(url),
+				headers: {'User-Agent': 'LocadoApp/1.0'},
+			  ).timeout(Duration(seconds: 6)); // Quick timeout for immediate results
+
+			  if (response.statusCode == 200) {
+				final List<dynamic> places = jsonDecode(response.body);
+				
+				for (final place in places.take(10)) {
+				  final lat = double.parse(place['lat']);
+				  final lng = double.parse(place['lon']);
+				  final name = place['display_name'] ?? 'Unknown Place';
+				  final type = place['type'] ?? 'location';
+				  
+				  final coordKey = '${lat.toStringAsFixed(6)}_${lng.toStringAsFixed(6)}';
+				  if (addedCoordinates.contains(coordKey)) continue;
+				  
+				  final distance = Geolocator.distanceBetween(
+					_currentLatLng!.latitude,
+					_currentLatLng!.longitude,
+					lat,
+					lng,
+				  );
+
+				  if (distance <= distanceLimit) {
+					addedCoordinates.add(coordKey);
+					
+					final cleanName = _cleanDisplayName(name);
+					final taskItems = await _generateTaskItemsFromType(cleanName, type);
+
+					results.add(AILocationResult(
+					  name: cleanName,
+					  description: 'Local $type (${(distance/1000).toStringAsFixed(1)}km away)',
+					  coordinates: UniversalLatLng(lat, lng),
+					  taskItems: taskItems,
+					  category: type,
+					  distanceFromUser: distance,
+					));
+					
+					print('⚡ NOMINATIM QUICK: Added $cleanName (${(distance/1000).toStringAsFixed(1)}km)');
+				  }
+				}
+			  }
+			  
+			  // Small delay between requests
+			  await Future.delayed(Duration(milliseconds: 150));
+			  
+			} catch (e) {
+			  print('❌ NOMINATIM QUICK: Error searching "$searchTerm": $e');
+			  continue;
+			}
+		  }
+		  
+		  // Stop if we have enough results for quick display
+		  if (results.length >= 5) {
+			print('⚡ NOMINATIM QUICK: Found ${results.length} results at ${radiusKm}km - sufficient for quick display');
+			break;
+		  }
+		}
+		
+		// Sort by distance
+		results.sort((a, b) => a.distanceFromUser!.compareTo(b.distanceFromUser!));
+		
+		print('⚡ NOMINATIM QUICK: Final quick results: ${results.length}');
+		return results.take(20).toList();
+		
+	  } catch (e) {
+		print('❌ NOMINATIM QUICK: Error = $e');
+		return [];
+	  }
+	}
+
+	/// NEW METHOD: Background Overpass enhancement
+	/// FIXED METHOD: Background Overpass enhancement with null safety
+		Future<void> _enhanceWithOverpassInBackground(
+			String category, 
+			List<String> localTerms,
+			Map<String, List<String>> osmTags,
+			List<AILocationResult> nominatimResults
+		) async {
+		  try {
+			print('🔄 BACKGROUND ENHANCEMENT: Starting Overpass enhancement');
+			
+			// Get available servers
+			final availableServers = await _getOptimalServerOrder();
+			
+			// Try urban search first (1.5km radius)
+			List<AILocationResult> overpassResults = await _searchOverpassDirect(category, localTerms, osmTags);
+			
+			// If urban didn't find much, try rural
+			if (overpassResults.length < 3) {
+			  print('🔄 BACKGROUND ENHANCEMENT: Urban Overpass found only ${overpassResults.length}, trying rural');
+			  final ruralOverpassResults = await _searchOverpassRuralFallback(category, localTerms, osmTags, availableServers);
+			  if (ruralOverpassResults.length > overpassResults.length) {
+				overpassResults = ruralOverpassResults;
+			  }
+			}
+			
+			// Combine and deduplicate results
+			final combinedResults = _combineAndDeduplicateResults(nominatimResults, overpassResults);
+			
+			// SAFETY CHECK: Only update UI if widget is still mounted
+			if (!mounted) {
+			  print('🔄 BACKGROUND ENHANCEMENT: Widget unmounted, skipping UI update');
+			  return;
+			}
+			
+			// Update UI with enhanced results
+			setState(() {
+			  _searchResults = combinedResults;
+			  _isEnhancing = false;
+			});
+			
+			if (combinedResults.length > nominatimResults.length) {
+			  _showSnackBar('Enhanced with ${combinedResults.length - nominatimResults.length} additional detailed locations', Colors.green);
+			} else {
+			  _showSnackBar('Search completed with detailed information', Colors.green);
+			}
+			
+			print('✅ BACKGROUND ENHANCEMENT: Completed - ${nominatimResults.length} → ${combinedResults.length} results');
+			
+		  } catch (e) {
+			print('❌ BACKGROUND ENHANCEMENT: Error = $e');
+			
+			// SAFETY CHECK: Only update UI if widget is still mounted
+			if (mounted) {
+			  setState(() {
+				_isEnhancing = false;
+			  });
+			  _showSnackBar('Background enhancement completed', Colors.blue);
+			}
+		  }
+		}
+	/// NEW METHOD: Combine and deduplicate results from different sources
+	List<AILocationResult> _combineAndDeduplicateResults(
+		List<AILocationResult> nominatimResults, 
+		List<AILocationResult> overpassResults
+	) {
+	  print('🔗 COMBINING RESULTS: Nominatim: ${nominatimResults.length}, Overpass: ${overpassResults.length}');
+	  
+	  final Map<String, AILocationResult> combinedMap = {};
+	  
+	  // Add Nominatim results first
+	  for (final result in nominatimResults) {
+		final key = '${result.coordinates.latitude.toStringAsFixed(5)}_${result.coordinates.longitude.toStringAsFixed(5)}';
+		combinedMap[key] = result;
+	  }
+	  
+	  // Add Overpass results, merging or replacing where appropriate
+	  for (final overpassResult in overpassResults) {
+		final key = '${overpassResult.coordinates.latitude.toStringAsFixed(5)}_${overpassResult.coordinates.longitude.toStringAsFixed(5)}';
+		
+		if (combinedMap.containsKey(key)) {
+		  // Merge data - prefer Overpass for detailed information
+		  final existing = combinedMap[key]!;
+		  
+		  // Use Overpass data if it has more detailed task items or better category
+		  if (overpassResult.taskItems.length > existing.taskItems.length ||
+			  overpassResult.category != 'location') {
+			print('🔗 MERGING: Enhancing ${existing.name} with Overpass data');
+			combinedMap[key] = AILocationResult(
+			  name: existing.name, // Keep original name
+			  description: overpassResult.description.isNotEmpty ? overpassResult.description : existing.description,
+			  coordinates: existing.coordinates, // Keep original coordinates
+			  taskItems: overpassResult.taskItems.isNotEmpty ? overpassResult.taskItems : existing.taskItems,
+			  category: overpassResult.category != 'location' ? overpassResult.category : existing.category,
+			  distanceFromUser: existing.distanceFromUser,
+			  isSelected: existing.isSelected,
+			);
+		  }
+		} else {
+		  // Add new Overpass result
+		  print('🔗 ADDING: New Overpass result ${overpassResult.name}');
+		  combinedMap[key] = overpassResult;
+		}
+	  }
+	  
+	  // Convert back to list and sort by distance
+	  final combinedResults = combinedMap.values.toList();
+	  combinedResults.sort((a, b) {
+		if (a.distanceFromUser == null && b.distanceFromUser == null) return 0;
+		if (a.distanceFromUser == null) return 1;
+		if (b.distanceFromUser == null) return -1;
+		return a.distanceFromUser!.compareTo(b.distanceFromUser!);
+	  });
+	  
+	  print('🔗 COMBINED RESULTS: Final count: ${combinedResults.length}');
+	  return combinedResults.take(25).toList();
+	}
+
+	/// NEW METHOD: Rural search fallback when Nominatim finds nothing
+	Future<void> _tryRuralSearchFallback(String category, List<String> localTerms, Map<String, List<String>> osmTags) async {
+	  try {
+		print('🌾 RURAL FALLBACK: Nominatim found nothing, trying rural search');
+		
+		setState(() {
+		  _isEnhancing = true;
+		});
+		
+		final availableServers = await _getOptimalServerOrder();
+		final ruralResults = await _searchRuralWithNominatimPrimary(category, localTerms, osmTags, availableServers);
+		
+		setState(() {
+		  _searchResults = ruralResults;
+		  _isEnhancing = false;
+		});
+		
+		if (ruralResults.isNotEmpty) {
+		  final searchType = ruralResults.any((r) => r.distanceFromUser != null && r.distanceFromUser! > 2000) 
+			  ? 'expanded area' : 'nearby';
+		  _showSnackBar('Found ${ruralResults.length} locations in $searchType', Colors.green);
+		} else {
+		  _showSnackBar('No locations found in the area', Colors.orange);
+		}
+		
+	  } catch (e) {
+		print('❌ RURAL FALLBACK: Error = $e');
+		setState(() {
+		  _isEnhancing = false;
+		});
+		_showSnackBar('No locations found in the area', Colors.orange);
+	  }
+	}
 
 	// NEW METHOD: AI-powered intent detection
 	Future<Map<String, dynamic>> _detectIntentWithAI(String query) async {
@@ -3175,105 +3478,6 @@ out center meta;
 	  }
 	}
 
-	/// MODIFIED METHOD: Enhanced quick search with rural fallback
-    Future<void> _performOptimizedQuickSearch(String query) async {
-	  if (_openAIApiKey == 'YOUR_OPENAI_API_KEY_HERE') {
-		_showSnackBar('Please add your OpenAI API key', Colors.red);
-		return;
-	  }
-
-	  // Check network
-	  try {
-		await http.get(Uri.parse('https://www.google.com')).timeout(Duration(seconds: 3));
-	  } catch (e) {
-		_showSnackBar('No internet connection. Please check your network.', Colors.red);
-		return;
-	  }
-
-	  // Ensure we have location
-	  if (_currentLatLng == null) {
-		_showSnackBar('Getting your location, please wait...', Colors.orange);
-		await _getCurrentLocationPrecise();
-		if (_currentLatLng == null) {
-		  _showSnackBar('Could not get your location. Using default location.', Colors.orange);
-		}
-	  }
-
-	  setState(() {
-		_isLoading = true;
-		_searchResults.clear();
-		_hasSearched = false;
-	  });
-
-	  try {
-		print('🚀 OPTIMIZED SEARCH: Starting for "$query"');
-		
-		// Step 1: Get category-specific OSM tags
-		final osmTags = _getCategoryOSMTags(query);
-		print('🏷️ OSM TAGS: $osmTags');
-		
-		// Step 2: Get current country for translation
-		final countryCode = await _getCurrentCountryCode();
-		print('🌍 COUNTRY: $countryCode');
-		
-		// Step 3: Get local translations
-		final category = query.split(' ')[0]; // Get first word as category
-		final localTerms = await _translateCategoryToLocal(category, countryCode);
-		print('🌍 LOCAL TERMS: $localTerms');
-		
-		// Step 4: URBAN SEARCH (existing logic - unchanged)
-		print('🏙️ URBAN SEARCH: Starting with 1.5km radius');
-		
-		// Get optimal server order for both urban and rural search
-		final availableServers = await _getOptimalServerOrder();
-		print('🌐 SERVERS: Using ${availableServers.length} available servers');
-		
-		List<AILocationResult> results = await _searchOverpassDirect(category, localTerms, osmTags);
-		
-		// Step 5: RURAL SEARCH (new logic - only if urban search finds <5 results)
-		if (results.length < 5) {
-		  print('🌾 RURAL SEARCH: Urban search found only ${results.length} results, starting rural search');
-		  final ruralResults = await _searchRuralWithNominatimPrimary(category, localTerms, osmTags, availableServers);
-		  
-		  if (ruralResults.length >= 5) {
-			print('✅ RURAL SEARCH: Found ${ruralResults.length} results, replacing urban results');
-			results = ruralResults;
-		  } else {
-			print('⚠️ RURAL SEARCH: Found only ${ruralResults.length} results, keeping urban results');
-			// Keep urban results even if <5, as they might be closer
-			if (ruralResults.length > results.length) {
-			  results = ruralResults;
-			}
-		  }
-		} else {
-		  print('✅ URBAN SEARCH: Found ${results.length} results, no need for rural search');
-		}
-		
-		setState(() {
-		  _searchResults = results;
-		  _hasSearched = true;
-		  _isLoading = false;
-		});
-
-		if (_searchResults.isEmpty) {
-		  _showSnackBar('No ${category.toLowerCase()} found in the area. Try expanding search manually.', Colors.blue);
-		} else {
-		  final searchType = results.length >= 5 && results.any((r) => r.distanceFromUser != null && r.distanceFromUser! > 1500) 
-			  ? 'expanded area' : 'nearby';
-		  _showSnackBar('Found ${_searchResults.length} ${category.toLowerCase()} locations in $searchType', Colors.green);
-		}
-
-	  } catch (e, stackTrace) {
-		print('❌ OPTIMIZED SEARCH: ERROR = $e');
-		print('❌ OPTIMIZED SEARCH: STACK TRACE = $stackTrace');
-
-		setState(() {
-		  _isLoading = false;
-		  _hasSearched = true;
-		});
-		_showSnackBar('Search error: ${e.toString()}', Colors.red);
-	  }
-	}
 
 	/// Generate task items from OSM tags
 	Future<List<String>> _generateTaskItemsFromOSMTags(
@@ -3626,300 +3830,431 @@ out center meta;
    );
  }
 
- Widget _buildResultsSection() {
-   if (_isLoading) {
-     return const Center(
-       child: Column(
-         mainAxisAlignment: MainAxisAlignment.center,
-         children: [
-           CircularProgressIndicator(color: Colors.teal),
-           SizedBox(height: 16),
-           Text(
-             'AI is searching for locations...',
-             style: TextStyle(
-               fontSize: 16,
-               color: Colors.grey,
-             ),
-           ),
-         ],
-       ),
-     );
-   }
+Widget _buildResultsSection() {
+	  if (_isLoading) {
+		return const Center(
+		  child: Column(
+			mainAxisAlignment: MainAxisAlignment.center,
+			children: [
+			  CircularProgressIndicator(color: Colors.teal),
+			  SizedBox(height: 16),
+			  Text(
+				'AI is searching for locations...',
+				style: TextStyle(
+				  fontSize: 16,
+				  color: Colors.grey,
+				),
+			  ),
+			],
+		  ),
+		);
+	  }
+	 
+    /// UPDATED METHOD: Empty results section (extracted for better organization)
+	Widget _buildEmptyResultsSection() {
+	  return Center(
+		child: Column(
+		  mainAxisAlignment: MainAxisAlignment.center,
+		  children: [
+			Icon(
+			  Icons.search_off,
+			  size: 80,
+			  color: Colors.grey.shade300,
+			),
+			const SizedBox(height: 16),
+			Text(
+			  'No locations found',
+			  style: TextStyle(
+				fontSize: 18,
+				color: Colors.grey.shade600,
+				fontWeight: FontWeight.w500,
+			  ),
+			),
+			const SizedBox(height: 8),
+			Text(
+			  'Try a different search query or expand the search area',
+			  style: TextStyle(
+				fontSize: 14,
+				color: Colors.grey.shade500,
+			  ),
+			  textAlign: TextAlign.center,
+			),
+			const SizedBox(height: 20),
 
-   // Show hints when no search has been performed
-   if (!_hasSearched) {
-     return Column(
-       children: [
-         Expanded(
-           child: SingleChildScrollView(
-             padding: const EdgeInsets.all(16),
-             child: Column(
-               crossAxisAlignment: CrossAxisAlignment.start,
-               children: [
-                 // Quick Search header
-                 Row(
-                   children: [
-                     Icon(
-                       Icons.lightbulb_outline,
-                       color: Colors.amber.shade600,
-                       size: 20,
-                     ),
-                     const SizedBox(width: 8),
-                     Text(
-                       'Quick Search',
-                       style: TextStyle(
-                         fontSize: 16,
-                         fontWeight: FontWeight.bold,
-                         color: Colors.grey.shade800,
-                       ),
-                     ),
-                   ],
-                 ),
-                 const SizedBox(height: 8),
-                 Text(
-                   'Tap any category to search nearby locations:',
-                   style: TextStyle(
-                     fontSize: 13,
-                     color: Colors.grey.shade600,
-                   ),
-                 ),
-                 const SizedBox(height: 16),
+			ElevatedButton.icon(
+			  onPressed: () {
+				setState(() {
+				  _hasSearched = false;
+				  _searchResults.clear();
+				  _searchController.clear();
+				  _isEnhancing = false;
+				});
+			  },
+			  icon: const Icon(Icons.refresh, size: 18),
+			  label: const Text('Try Quick Search'),
+			  style: ElevatedButton.styleFrom(
+				backgroundColor: Colors.teal,
+				foregroundColor: Colors.white,
+				padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+				shape: RoundedRectangleBorder(
+				  borderRadius: BorderRadius.circular(8),
+				),
+			  ),
+			),
+		  ],
+		),
+	  );
+	}
 
-                 // Grid with hint buttons
-                 GridView.builder(
-                   shrinkWrap: true,
-                   physics: const NeverScrollableScrollPhysics(),
-                   gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                     crossAxisCount: 2,
-                     childAspectRatio: 3.0,
-                     crossAxisSpacing: 10,
-                     mainAxisSpacing: 10,
-                   ),
-                   itemCount: _getSearchHints().length,
-                   itemBuilder: (context, index) {
-                     final hint = _getSearchHints()[index];
-                     return _buildCompactHintButton(hint);
-                   },
-                 ),
 
-                 const SizedBox(height: 20),
+	  // Show hints when no search has been performed
+	  if (!_hasSearched) {
+		return _buildSearchHintsSection(); // Keep existing hints logic
+	  }
 
-                 // OpenStreetMap info
-                 Container(
-                   padding: const EdgeInsets.all(12),
-                   decoration: BoxDecoration(
-                     color: Colors.green.shade50,
-                     borderRadius: BorderRadius.circular(8),
-                     border: Border.all(color: Colors.green.shade200, width: 1),
-                   ),
-                   child: Row(
-                     children: [
-                       Icon(Icons.layers, color: Colors.green.shade600, size: 18),
-                       const SizedBox(width: 10),
-                       Expanded(
-                         child: Column(
-                           crossAxisAlignment: CrossAxisAlignment.start,
-                           children: [
-                             Text(
-                               'OpenStreetMap Integration',
-                               style: TextStyle(
-                                 fontWeight: FontWeight.bold,
-                                 color: Colors.green.shade700,
-                                 fontSize: 12,
-                               ),
-                             ),
-                             const SizedBox(height: 2),
-                             Text(
-                               'No Google API required - using free OpenStreetMap data',
-                               style: TextStyle(
-                                 fontSize: 10,
-                                 color: Colors.green.shade600,
-                                 height: 1.2,
-                               ),
-                             ),
-                           ],
-                         ),
-                       ),
-                     ],
-                   ),
-                 ),
+	  // Show empty results
+	  if (_searchResults.isEmpty) {
+		return _buildEmptyResultsSection(); // Keep existing empty results logic
+	  }
 
-                 const SizedBox(height: 16),
+	  // Show results with enhancement indicator
+	  return Column(
+		children: [
+		  // Header with selection info + enhancement indicator
+		  Container(
+			padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+			decoration: BoxDecoration(
+			  color: Colors.white,
+			  border: Border(
+				bottom: BorderSide(color: Colors.grey.shade200),
+			  ),
+			),
+			child: Column(
+			  children: [
+				// Main header row
+				Row(
+				  children: [
+					// Back to hints button
+					InkWell(
+					  onTap: () {
+						setState(() {
+						  _hasSearched = false;
+						  _searchResults.clear();
+						  _searchController.clear();
+						  _isEnhancing = false;
+						});
+					  },
+					  borderRadius: BorderRadius.circular(6),
+					  child: Container(
+						padding: const EdgeInsets.all(6),
+						child: Icon(
+						  Icons.arrow_back,
+						  color: Colors.grey.shade600,
+						  size: 20,
+						),
+					  ),
+					),
+					const SizedBox(width: 12),
 
-                 // Multilingual info
-                 Container(
-                   padding: const EdgeInsets.all(12),
-                   decoration: BoxDecoration(
-                     color: Colors.blue.shade50,
-                     borderRadius: BorderRadius.circular(8),
-                     border: Border.all(color: Colors.blue.shade200, width: 1),
-                   ),
-                   child: Row(
-                     children: [
-                       Icon(Icons.translate, color: Colors.blue.shade600, size: 18),
-                       const SizedBox(width: 10),
-                       Expanded(
-                         child: Column(
-                           crossAxisAlignment: CrossAxisAlignment.start,
-                           children: [
-                             Text(
-                               'Multilingual Search',
-                               style: TextStyle(
-                                 fontWeight: FontWeight.bold,
-                                 color: Colors.blue.shade700,
-                                 fontSize: 12,
-                               ),
-                             ),
-                             const SizedBox(height: 2),
-                             Text(
-                               'Search in any language: English, Deutsch, Français, Español, etc.',
-                               style: TextStyle(
-                                 fontSize: 10,
-                                 color: Colors.blue.shade600,
-                                 height: 1.2,
-                               ),
-                             ),
-                           ],
-                         ),
-                       ),
-                     ],
-                   ),
-                 ),
-               ],
-             ),
-           ),
-         ),
-       ],
-     );
-   }
+					Icon(Icons.location_on, color: Colors.teal.shade600, size: 20),
+					const SizedBox(width: 8),
+					Expanded(
+					  child: Text(
+						'Found ${_searchResults.length} locations',
+						style: TextStyle(
+						  fontSize: 16,
+						  fontWeight: FontWeight.bold,
+						  color: Colors.teal.shade700,
+						),
+					  ),
+					),
+					Text(
+					  '${_searchResults.where((r) => r.isSelected).length} selected',
+					  style: TextStyle(
+						fontSize: 14,
+						color: Colors.grey.shade600,
+					  ),
+					),
+				  ],
+				),
 
-   // Show empty results
-   if (_searchResults.isEmpty) {
-     return Center(
-       child: Column(
-         mainAxisAlignment: MainAxisAlignment.center,
-         children: [
-           Icon(
-             Icons.search_off,
-             size: 80,
-             color: Colors.grey.shade300,
-           ),
-           const SizedBox(height: 16),
-           Text(
-             'No locations found',
-             style: TextStyle(
-               fontSize: 18,
-               color: Colors.grey.shade600,
-               fontWeight: FontWeight.w500,
-             ),
-           ),
-           const SizedBox(height: 8),
-           Text(
-             'Try a different search query',
-             style: TextStyle(
-               fontSize: 14,
-               color: Colors.grey.shade500,
-             ),
-           ),
-           const SizedBox(height: 20),
+				// Enhancement indicator (show only when enhancing)
+				if (_isEnhancing) ...[
+				  const SizedBox(height: 8),
+				  _buildEnhancementIndicator(),
+				],
+			  ],
+			),
+		  ),
 
-           ElevatedButton.icon(
-             onPressed: () {
-               setState(() {
-                 _hasSearched = false;
-                 _searchResults.clear();
-                 _searchController.clear();
-               });
-             },
-             icon: const Icon(Icons.refresh, size: 18),
-             label: const Text('Try Quick Search'),
-             style: ElevatedButton.styleFrom(
-               backgroundColor: Colors.teal,
-               foregroundColor: Colors.white,
-               padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-               shape: RoundedRectangleBorder(
-                 borderRadius: BorderRadius.circular(8),
-               ),
-             ),
-           ),
-         ],
-       ),
-     );
-   }
+		  // Results List
+		  Expanded(
+			child: ListView.separated(
+			  padding: const EdgeInsets.fromLTRB(16, 8, 16, 100),
+			  itemCount: _searchResults.length,
+			  separatorBuilder: (context, index) => const SizedBox(height: 8),
+			  itemBuilder: (context, index) {
+				final result = _searchResults[index];
+				return _buildResultCard(result, index);
+			  },
+			),
+		  ),
+		],
+	  );
+	}
+	
+	/// NEW METHOD: Enhancement progress indicator
+	Widget _buildEnhancementIndicator() {
+	  return Container(
+		padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+		decoration: BoxDecoration(
+		  color: Colors.blue.shade50,
+		  borderRadius: BorderRadius.circular(8),
+		  border: Border.all(color: Colors.blue.shade200, width: 1),
+		),
+		child: Row(
+		  children: [
+			// Animated loading indicator
+			SizedBox(
+			  width: 16,
+			  height: 16,
+			  child: CircularProgressIndicator(
+				strokeWidth: 2,
+				color: Colors.blue.shade600,
+			  ),
+			),
+			const SizedBox(width: 10),
+			Expanded(
+			  child: Column(
+				crossAxisAlignment: CrossAxisAlignment.start,
+				children: [
+				  Text(
+					'Enhancing with detailed data...',
+					style: TextStyle(
+					  fontSize: 12,
+					  fontWeight: FontWeight.w600,
+					  color: Colors.blue.shade700,
+					),
+				  ),
+				  const SizedBox(height: 2),
+				  Text(
+					'Searching for opening hours, contact info, and more',
+					style: TextStyle(
+					  fontSize: 10,
+					  color: Colors.blue.shade600,
+					  height: 1.2,
+					),
+				  ),
+				],
+			  ),
+			),
+			// Enhancement icon
+			Container(
+			  padding: const EdgeInsets.all(4),
+			  decoration: BoxDecoration(
+				color: Colors.blue.shade100,
+				borderRadius: BorderRadius.circular(4),
+			  ),
+			  child: Icon(
+				Icons.auto_awesome,
+				size: 14,
+				color: Colors.blue.shade600,
+			  ),
+			),
+		  ],
+		),
+	  );
+	}
 
-   // Show results
-   return Column(
-     children: [
-       // Header with selection info + back button
-       Container(
-         padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-         decoration: BoxDecoration(
-           color: Colors.white,
-           border: Border(
-             bottom: BorderSide(color: Colors.grey.shade200),
-           ),
-         ),
-         child: Row(
-           children: [
-             // Back to hints button
-             InkWell(
-               onTap: () {
-                 setState(() {
-                   _hasSearched = false;
-                   _searchResults.clear();
-                   _searchController.clear();
-                 });
-               },
-               borderRadius: BorderRadius.circular(6),
-               child: Container(
-                 padding: const EdgeInsets.all(6),
-                 child: Icon(
-                   Icons.arrow_back,
-                   color: Colors.grey.shade600,
-                   size: 20,
-                 ),
-               ),
-             ),
-             const SizedBox(width: 12),
+/// UPDATED METHOD: Search hints section (extracted for better organization)
+	Widget _buildSearchHintsSection() {
+	  return Column(
+		children: [
+		  Expanded(
+			child: SingleChildScrollView(
+			  padding: const EdgeInsets.all(16),
+			  child: Column(
+				crossAxisAlignment: CrossAxisAlignment.start,
+				children: [
+				  // Quick Search header
+				  Row(
+					children: [
+					  Icon(
+						Icons.lightbulb_outline,
+						color: Colors.amber.shade600,
+						size: 20,
+					  ),
+					  const SizedBox(width: 8),
+					  Text(
+						'Quick Search',
+						style: TextStyle(
+						  fontSize: 16,
+						  fontWeight: FontWeight.bold,
+						  color: Colors.grey.shade800,
+						),
+					  ),
+					],
+				  ),
+				  const SizedBox(height: 8),
+				  Text(
+					'Tap any category to search nearby locations:',
+					style: TextStyle(
+					  fontSize: 13,
+					  color: Colors.grey.shade600,
+					),
+				  ),
+				  const SizedBox(height: 16),
 
-             Icon(Icons.location_on, color: Colors.teal.shade600, size: 20),
-             const SizedBox(width: 8),
-             Expanded(
-               child: Text(
-                 'Found ${_searchResults.length} locations',
-                 style: TextStyle(
-                   fontSize: 16,
-                   fontWeight: FontWeight.bold,
-                   color: Colors.teal.shade700,
-                 ),
-               ),
-             ),
-             Text(
-               '${_searchResults.where((r) => r.isSelected).length} selected',
-               style: TextStyle(
-                 fontSize: 14,
-                 color: Colors.grey.shade600,
-               ),
-             ),
-           ],
-         ),
-       ),
+				  // Grid with hint buttons
+				  GridView.builder(
+					shrinkWrap: true,
+					physics: const NeverScrollableScrollPhysics(),
+					gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+					  crossAxisCount: 2,
+					  childAspectRatio: 3.0,
+					  crossAxisSpacing: 10,
+					  mainAxisSpacing: 10,
+					),
+					itemCount: _getSearchHints().length,
+					itemBuilder: (context, index) {
+					  final hint = _getSearchHints()[index];
+					  return _buildCompactHintButton(hint);
+					},
+				  ),
 
-       // Results List
-       Expanded(
-         child: ListView.separated(
-           padding: const EdgeInsets.fromLTRB(16, 8, 16, 100),
-           itemCount: _searchResults.length,
-           separatorBuilder: (context, index) => const SizedBox(height: 8),
-           itemBuilder: (context, index) {
-             final result = _searchResults[index];
-             return _buildResultCard(result, index);
-           },
-         ),
-       ),
-     ],
-   );
- }
+				  const SizedBox(height: 20),
+
+				  // Progressive Enhancement info
+				  Container(
+					padding: const EdgeInsets.all(12),
+					decoration: BoxDecoration(
+					  color: Colors.purple.shade50,
+					  borderRadius: BorderRadius.circular(8),
+					  border: Border.all(color: Colors.purple.shade200, width: 1),
+					),
+					child: Row(
+					  children: [
+						Icon(Icons.speed, color: Colors.purple.shade600, size: 18),
+						const SizedBox(width: 10),
+						Expanded(
+						  child: Column(
+							crossAxisAlignment: CrossAxisAlignment.start,
+							children: [
+							  Text(
+								'Smart Progressive Search',
+								style: TextStyle(
+								  fontWeight: FontWeight.bold,
+								  color: Colors.purple.shade700,
+								  fontSize: 12,
+								),
+							  ),
+							  const SizedBox(height: 2),
+							  Text(
+								'Instant results + background enhancement for detailed info',
+								style: TextStyle(
+								  fontSize: 10,
+								  color: Colors.purple.shade600,
+								  height: 1.2,
+								),
+							  ),
+							],
+						  ),
+						),
+					  ],
+					),
+				  ),
+
+				  const SizedBox(height: 16),
+
+				  // OpenStreetMap info (keep existing)
+				  Container(
+					padding: const EdgeInsets.all(12),
+					decoration: BoxDecoration(
+					  color: Colors.green.shade50,
+					  borderRadius: BorderRadius.circular(8),
+					  border: Border.all(color: Colors.green.shade200, width: 1),
+					),
+					child: Row(
+					  children: [
+						Icon(Icons.layers, color: Colors.green.shade600, size: 18),
+						const SizedBox(width: 10),
+						Expanded(
+						  child: Column(
+							crossAxisAlignment: CrossAxisAlignment.start,
+							children: [
+							  Text(
+								'OpenStreetMap Integration',
+								style: TextStyle(
+								  fontWeight: FontWeight.bold,
+								  color: Colors.green.shade700,
+								  fontSize: 12,
+								),
+							  ),
+							  const SizedBox(height: 2),
+							  Text(
+								'No Google API required - using free OpenStreetMap data',
+								style: TextStyle(
+								  fontSize: 10,
+								  color: Colors.green.shade600,
+								  height: 1.2,
+								),
+							  ),
+							],
+						  ),
+						),
+					  ],
+					),
+				  ),
+
+				  const SizedBox(height: 16),
+
+				  // Multilingual info (keep existing)
+				  Container(
+					padding: const EdgeInsets.all(12),
+					decoration: BoxDecoration(
+					  color: Colors.blue.shade50,
+					  borderRadius: BorderRadius.circular(8),
+					  border: Border.all(color: Colors.blue.shade200, width: 1),
+					),
+					child: Row(
+					  children: [
+						Icon(Icons.translate, color: Colors.blue.shade600, size: 18),
+						const SizedBox(width: 10),
+						Expanded(
+						  child: Column(
+							crossAxisAlignment: CrossAxisAlignment.start,
+							children: [
+							  Text(
+								'Multilingual Search',
+								style: TextStyle(
+								  fontWeight: FontWeight.bold,
+								  color: Colors.blue.shade700,
+								  fontSize: 12,
+								),
+							  ),
+							  const SizedBox(height: 2),
+							  Text(
+								'Search in any language: English, Deutsch, Français, Español, etc.',
+								style: TextStyle(
+								  fontSize: 10,
+								  color: Colors.blue.shade600,
+								  height: 1.2,
+								),
+							  ),
+							],
+						  ),
+						),
+					  ],
+					),
+				  ),
+				],
+			  ),
+			),
+		  ),
+		],
+	  );
+	}	
+	
 
  Widget _buildCompactHintButton(Map<String, dynamic> hint) {
    return Material(
