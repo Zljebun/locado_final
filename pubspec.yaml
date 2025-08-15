@@ -48,6 +48,8 @@ dependencies:
   device_info_plus: ^9.1.0
   
   url_launcher: ^6.2.4
+  
+  webview_flutter: ^4.4.2
 
 dev_dependencies:
   flutter_test:

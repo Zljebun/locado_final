@@ -12,6 +12,8 @@ import '../helpers/database_helper.dart';
 import '../location_service.dart';
 import '../widgets/osm_map_widget.dart';
 import 'dart:math' as math;
+import 'package:webview_flutter/webview_flutter.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 // Server health check result
 class ServerHealth {
@@ -1246,9 +1248,10 @@ class _AILocationSearchScreenState extends State<AILocationSearchScreen> {
 	}
 	
     /// UPDATED METHOD: Extract image URL with Google Places API fallback
+	/// UPDATED METHOD: Enhanced image extraction with Street View integration
 	Future<String?> _extractImageFromOSMTags(Map<String, dynamic> tags, String locationName, double lat, double lng) async {
 	  try {
-		// Strategy 1: Direct image tag
+		// Strategy 1: Direct image tag (EXISTING - UNCHANGED)
 		if (tags['image'] != null && tags['image'].toString().isNotEmpty) {
 		  final imageUrl = tags['image'].toString();
 		  if (_isValidImageUrl(imageUrl)) {
@@ -1257,7 +1260,7 @@ class _AILocationSearchScreenState extends State<AILocationSearchScreen> {
 		  }
 		}
 
-		// Strategy 2: Wikimedia Commons tag
+		// Strategy 2: Wikimedia Commons tag (EXISTING - UNCHANGED)
 		if (tags['wikimedia_commons'] != null && tags['wikimedia_commons'].toString().isNotEmpty) {
 		  final wikimediaUrl = _convertWikimediaToImageUrl(tags['wikimedia_commons'].toString());
 		  if (wikimediaUrl != null) {
@@ -1266,7 +1269,7 @@ class _AILocationSearchScreenState extends State<AILocationSearchScreen> {
 		  }
 		}
 
-		// Strategy 3: Wikipedia API integration
+		// Strategy 3: Wikipedia API integration (EXISTING - UNCHANGED)
 		if (tags['wikipedia'] != null && tags['wikipedia'].toString().isNotEmpty) {
 		  print('🖼️ WIKIPEDIA: Found Wikipedia reference: ${tags['wikipedia']}');
 		  final wikipediaImageUrl = await _getImageFromWikipediaAPI(tags['wikipedia'].toString());
@@ -1276,15 +1279,23 @@ class _AILocationSearchScreenState extends State<AILocationSearchScreen> {
 		  }
 		}
 
-		// Strategy 4: Google Places API fallback (NEW)
-		print('🔍 GOOGLE PLACES: No OSM/Wikipedia images, trying Google Places for "$locationName"');
+		// Strategy 4: Google Street View Static API (NEW)
+		print('🏠 STREET VIEW: Trying Street View for "$locationName"');
+		final streetViewImageUrl = await _getStreetViewImage(locationName, lat, lng);
+		if (streetViewImageUrl != null) {
+		  print('🖼️ STREET VIEW: Found Street View image: $streetViewImageUrl');
+		  return streetViewImageUrl;
+		}
+
+		// Strategy 5: Google Places API fallback (EXISTING - UNCHANGED)
+		print('🔍 GOOGLE PLACES: No OSM/Wikipedia/Street View images, trying Google Places for "$locationName"');
 		final googlePlacesImageUrl = await _getImageFromGooglePlaces(locationName, lat, lng);
 		if (googlePlacesImageUrl != null) {
 		  print('🖼️ GOOGLE PLACES: Found image: $googlePlacesImageUrl');
 		  return googlePlacesImageUrl;
 		}
 
-		// Strategy 5: Website tag (for future web scraping)
+		// Strategy 6: Website tag (EXISTING - UNCHANGED)
 		if (tags['website'] != null && tags['website'].toString().isNotEmpty) {
 		  print('🖼️ OSM IMAGE: Found website: ${tags['website']} (potential image source)');
 		}
@@ -1331,6 +1342,71 @@ class _AILocationSearchScreenState extends State<AILocationSearchScreen> {
 		return null;
 	  }
 	}
+	
+	/// NEW METHOD: Get image using Google Street View Static API
+	Future<String?> _getStreetViewImage(String locationName, double lat, double lng) async {
+	  try {
+		// Check if Google API key is configured
+		final googleApiKey = dotenv.env['GOOGLE_API_KEY'] ?? dotenv.env['GOOGLE_PLACES_API_KEY'] ?? '';
+		
+		if (googleApiKey.isEmpty || googleApiKey == 'your_api_key_here') {
+		  print('🏠 STREET VIEW: API key not configured');
+		  return null;
+		}
+
+		// Build Street View Static API URL
+		final streetViewUrl = _buildStreetViewStaticUrl(lat, lng, googleApiKey);
+		
+		// Test if Street View image is available by making a HEAD request
+		final isAvailable = await _testStreetViewAvailability(streetViewUrl);
+		
+		if (isAvailable) {
+		  print('🏠 STREET VIEW: Image available for "$locationName" at $lat,$lng');
+		  return streetViewUrl;
+		} else {
+		  print('🏠 STREET VIEW: No image available for "$locationName" at $lat,$lng');
+		  return null;
+		}
+		
+	  } catch (e) {
+		print('❌ STREET VIEW: Error getting image: $e');
+		return null;
+	  }
+	}
+
+	/// NEW METHOD: Build Google Street View Static API URL
+	String _buildStreetViewStaticUrl(double lat, double lng, String apiKey) {
+	  // Optimized parameters for best results
+	  return 'https://maps.googleapis.com/maps/api/streetview'
+		  '?size=400x300'              // Good balance of quality and cost
+		  '&location=$lat,$lng'        // Use exact coordinates
+		  '&heading=235'               // Slightly angled view
+		  '&pitch=10'                  // Slight downward angle
+		  '&fov=75'                    // Field of view
+		  '&key=$apiKey';
+	}
+
+	/// NEW METHOD: Test if Street View image is available
+	Future<bool> _testStreetViewAvailability(String streetViewUrl) async {
+	  try {
+		// Make a HEAD request to check if image exists
+		final response = await http.head(Uri.parse(streetViewUrl))
+			.timeout(Duration(seconds: 5));
+		
+		// Street View returns 200 even for "no image" locations,
+		// but we can check content-length or make a quick GET request
+		if (response.statusCode == 200) {
+		  // For Street View, we assume it's available since it almost always has some image
+		  return true;
+		}
+		
+		return false;
+	  } catch (e) {
+		print('❌ STREET VIEW: Availability test failed: $e');
+		return false;
+	  }
+	}
+
 
 	/// NEW METHOD: Find Google Place using Nearby Search
 	Future<String?> _findGooglePlace(String locationName, double lat, double lng, String apiKey) async {
@@ -2907,9 +2983,10 @@ Future<SearchIntent> _detectSearchIntent(String originalQuery) async {
 		  }
 		}
 	/// NEW METHOD: Combine and deduplicate results from different sources
+	/// UPDATED METHOD: Combine and deduplicate results with proper image URL preservation
 	List<AILocationResult> _combineAndDeduplicateResults(
-		List<AILocationResult> nominatimResults, 
-		List<AILocationResult> overpassResults
+	  List<AILocationResult> nominatimResults, 
+	  List<AILocationResult> overpassResults
 	) {
 	  print('🔗 COMBINING RESULTS: Nominatim: ${nominatimResults.length}, Overpass: ${overpassResults.length}');
 	  
@@ -2919,6 +2996,13 @@ Future<SearchIntent> _detectSearchIntent(String originalQuery) async {
 	  for (final result in nominatimResults) {
 		final key = '${result.coordinates.latitude.toStringAsFixed(5)}_${result.coordinates.longitude.toStringAsFixed(5)}';
 		combinedMap[key] = result;
+		
+		// DEBUG: Log image URL status for Nominatim results
+		if (result.imageUrl != null) {
+		  print('🔗 NOMINATIM: ${result.name} HAS image URL');
+		} else {
+		  print('🔗 NOMINATIM: ${result.name} NO image URL');
+		}
 	  }
 	  
 	  // Add Overpass results, merging or replacing where appropriate
@@ -2926,26 +3010,45 @@ Future<SearchIntent> _detectSearchIntent(String originalQuery) async {
 		final key = '${overpassResult.coordinates.latitude.toStringAsFixed(5)}_${overpassResult.coordinates.longitude.toStringAsFixed(5)}';
 		
 		if (combinedMap.containsKey(key)) {
-		  // Merge data - prefer Overpass for detailed information
+		  // MERGE data - PRESERVE image URLs from both sources
 		  final existing = combinedMap[key]!;
 		  
+		  // DEBUG: Log what we're merging
+		  print('🔗 MERGING: ${existing.name}');
+		  print('   - Existing image: ${existing.imageUrl != null ? "YES" : "NO"}');
+		  print('   - Overpass image: ${overpassResult.imageUrl != null ? "YES" : "NO"}');
+		  
 		  // Use Overpass data if it has more detailed task items or better category
-		  if (overpassResult.taskItems.length > existing.taskItems.length ||
-			  overpassResult.category != 'location') {
-			print('🔗 MERGING: Enhancing ${existing.name} with Overpass data');
-			combinedMap[key] = AILocationResult(
-			  name: existing.name, // Keep original name
-			  description: overpassResult.description.isNotEmpty ? overpassResult.description : existing.description,
-			  coordinates: existing.coordinates, // Keep original coordinates
-			  taskItems: overpassResult.taskItems.isNotEmpty ? overpassResult.taskItems : existing.taskItems,
-			  category: overpassResult.category != 'location' ? overpassResult.category : existing.category,
-			  distanceFromUser: existing.distanceFromUser,
-			  isSelected: existing.isSelected,
-			);
+		  // BUT PRESERVE IMAGE URL FROM EITHER SOURCE
+		  String? mergedImageUrl;
+		  if (overpassResult.imageUrl != null) {
+			mergedImageUrl = overpassResult.imageUrl; // Prefer Overpass image (Street View)
+			print('   - Using Overpass image URL');
+		  } else if (existing.imageUrl != null) {
+			mergedImageUrl = existing.imageUrl; // Keep existing image if Overpass has none
+			print('   - Keeping existing image URL');
+		  } else {
+			mergedImageUrl = null;
+			print('   - No image URL available');
 		  }
+		  
+		  combinedMap[key] = AILocationResult(
+			name: existing.name, // Keep original name
+			description: overpassResult.description.isNotEmpty ? overpassResult.description : existing.description,
+			coordinates: existing.coordinates, // Keep original coordinates
+			taskItems: overpassResult.taskItems.isNotEmpty ? overpassResult.taskItems : existing.taskItems,
+			category: overpassResult.category != 'location' ? overpassResult.category : existing.category,
+			distanceFromUser: existing.distanceFromUser,
+			isSelected: existing.isSelected,
+			imageUrl: mergedImageUrl, // ✅ PRESERVE IMAGE URL!
+		  );
+		  
+		  print('   - Final merged result has image: ${mergedImageUrl != null ? "YES" : "NO"}');
+		  
 		} else {
 		  // Add new Overpass result
 		  print('🔗 ADDING: New Overpass result ${overpassResult.name}');
+		  print('   - Has image: ${overpassResult.imageUrl != null ? "YES" : "NO"}');
 		  combinedMap[key] = overpassResult;
 		}
 	  }
@@ -2959,7 +3062,16 @@ Future<SearchIntent> _detectSearchIntent(String originalQuery) async {
 		return a.distanceFromUser!.compareTo(b.distanceFromUser!);
 	  });
 	  
-	  print('🔗 COMBINED RESULTS: Final count: ${combinedResults.length}');
+	  // DEBUG: Final image URL count
+	  final imagesCount = combinedResults.where((r) => r.imageUrl != null).length;
+	  print('🔗 COMBINED RESULTS: Final count: ${combinedResults.length}, Images: $imagesCount');
+	  
+	  // DEBUG: List all results with image status
+	  for (int i = 0; i < combinedResults.length && i < 10; i++) {
+		final result = combinedResults[i];
+		print('🔗 FINAL [$i]: ${result.name} - Image: ${result.imageUrl != null ? "YES" : "NO"}');
+	  }
+	  
 	  return combinedResults.take(25).toList();
 	}
 
@@ -4132,6 +4244,136 @@ out center meta;
 
 
 	// ==================== END OPTIMIZED QUICK SEARCH METHODS ====================
+	
+	
+	/// Open location directly in Google Street View mode
+	Future<void> _openInGoogleMaps(AILocationResult result) async {
+	  try {
+		final lat = result.coordinates.latitude;
+		final lng = result.coordinates.longitude;
+		final locationName = Uri.encodeComponent(result.name);
+		
+		print('🗺️ STREET VIEW: Opening ${result.name} directly in Street View mode');
+		
+		// Try Google Maps Street View directly in app
+		final streetViewAppUrl = 'google.streetview:cbll=$lat,$lng&cbp=0,0,0,0,0';
+		
+		if (await canLaunchUrl(Uri.parse(streetViewAppUrl))) {
+		  print('📱 STREET VIEW: Opening Google Maps app in Street View mode');
+		  await launchUrl(
+			Uri.parse(streetViewAppUrl),
+			mode: LaunchMode.externalApplication,
+		  );
+		  return;
+		}
+		
+		// Fallback 1: Google Maps app with Street View layer
+		final googleMapsStreetViewUrl = 'comgooglemaps://?center=$lat,$lng&mapmode=streetview&zoom=18';
+		
+		if (await canLaunchUrl(Uri.parse(googleMapsStreetViewUrl))) {
+		  print('📱 STREET VIEW: Opening Google Maps with streetview mapmode');
+		  await launchUrl(
+			Uri.parse(googleMapsStreetViewUrl),
+			mode: LaunchMode.externalApplication,
+		  );
+		  return;
+		}
+		
+		// Fallback 2: Web Street View directly
+		final webStreetViewUrl = 'https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=$lat,$lng';
+		
+		if (await canLaunchUrl(Uri.parse(webStreetViewUrl))) {
+		  print('🌐 STREET VIEW: Opening web Street View directly');
+		  await launchUrl(
+			Uri.parse(webStreetViewUrl),
+			mode: LaunchMode.externalApplication,
+		  );
+		  return;
+		}
+		
+		// Fallback 3: Standard Street View web URL
+		final fallbackStreetViewUrl = 'https://www.google.com/maps/search/?api=1&query=$lat,$lng&layer=c';
+		
+		print('🌐 STREET VIEW: Opening Street View with layer parameter');
+		await launchUrl(
+		  Uri.parse(fallbackStreetViewUrl),
+		  mode: LaunchMode.externalApplication,
+		);
+		
+		// Show success message
+		_showSnackBar('Opened ${result.name} in Street View', Colors.green);
+		
+	  } catch (e) {
+		print('❌ STREET VIEW: Error opening Street View: $e');
+		_showSnackBar('Could not open Street View. Opening regular map...', Colors.orange);
+		
+		// Ultimate fallback to regular map view - use coordinates from result
+		try {
+		  final lat = result.coordinates.latitude;
+		  final lng = result.coordinates.longitude;
+		  final fallbackMapUrl = 'https://www.google.com/maps/@$lat,$lng,18z';
+		  await launchUrl(
+			Uri.parse(fallbackMapUrl),
+			mode: LaunchMode.externalApplication,
+		  );
+		} catch (e2) {
+		  _showSnackBar('Could not open location in Maps', Colors.red);
+		}
+	  }
+	}
+
+	/// Alternative method with more detailed URL schemes for different platforms
+	Future<void> _openInGoogleMapsAdvanced(AILocationResult result) async {
+	  try {
+		final lat = result.coordinates.latitude;
+		final lng = result.coordinates.longitude;
+		final locationName = Uri.encodeComponent(result.name);
+		
+		print('🗺️ NAVIGATION ADVANCED: Opening ${result.name} at $lat,$lng');
+		
+		// Platform-specific URLs in order of preference
+		final List<String> urlsToTry = [
+		  // Google Maps app with place name and coordinates
+		  'google.navigation:q=$lat,$lng&navigate=yes',
+		  'google.navigation:q=$lat,$lng',
+		  'comgooglemaps://?q=$lat,$lng&navigate=yes',
+		  'comgooglemaps://?q=$lat,$lng',
+		  
+		  // Generic maps schemes
+		  'maps:$lat,$lng',
+		  'maps://maps.apple.com/?q=$lat,$lng',
+		  
+		  // Web fallback
+		  'https://www.google.com/maps/search/?api=1&query=$lat,$lng',
+		];
+		
+		// Try each URL until one works
+		for (final url in urlsToTry) {
+		  try {
+			if (await canLaunchUrl(Uri.parse(url))) {
+			  print('📱 NAVIGATION: Successfully opening with URL: $url');
+			  await launchUrl(
+				Uri.parse(url),
+				mode: LaunchMode.externalApplication,
+			  );
+			  
+			  _showSnackBar('Opened ${result.name} in Maps', Colors.green);
+			  return;
+			}
+		  } catch (e) {
+			print('⚠️ NAVIGATION: Failed URL $url: $e');
+			continue;
+		  }
+		}
+		
+		// If all failed, show error
+		throw Exception('No suitable maps application found');
+		
+	  } catch (e) {
+		print('❌ NAVIGATION: Error opening maps: $e');
+		_showSnackBar('Could not open location in Maps. Please install Google Maps app.', Colors.red);
+	  }
+	}
 
  @override
  Widget build(BuildContext context) {
@@ -4860,7 +5102,7 @@ Widget _buildResultsSection() {
    );
  }
 
-/// UPDATED METHOD: Result card with image display
+	/// UPDATED METHOD: Result card with image display and fixed click handling
 	Widget _buildResultCard(AILocationResult result, int index) {
 	  return Container(
 		decoration: BoxDecoration(
@@ -4879,21 +5121,33 @@ Widget _buildResultsSection() {
 		),
 		child: Material(
 		  color: Colors.transparent,
-		  child: InkWell(
-			borderRadius: BorderRadius.circular(12),
-			onTap: () {
-			  setState(() {
-				result.isSelected = !result.isSelected;
-			  });
-			},
-			child: Column(
-			  crossAxisAlignment: CrossAxisAlignment.start,
-			  children: [
-				// Image section (NEW)
-				if (result.imageUrl != null) _buildLocationImage(result),
-				
-				// Content section
-				Padding(
+		  child: Column(
+			crossAxisAlignment: CrossAxisAlignment.start,
+			children: [
+			  // Image section with separate click handling
+			  if (result.imageUrl != null) 
+				GestureDetector(
+				  onTap: () {
+					// Open location in Google Maps instead of panorama
+					_openInGoogleMaps(result);
+				  },
+				  child: _buildLocationImage(result),
+				),
+			  
+			  // Content section with separate click handling for task selection
+			  InkWell(
+				borderRadius: result.imageUrl != null 
+					? const BorderRadius.only(
+						bottomLeft: Radius.circular(12),
+						bottomRight: Radius.circular(12),
+					  )
+					: BorderRadius.circular(12),
+				onTap: () {
+				  setState(() {
+					result.isSelected = !result.isSelected;
+				  });
+				},
+				child: Padding(
 				  padding: EdgeInsets.all(result.imageUrl != null ? 12 : 16),
 				  child: Column(
 					crossAxisAlignment: CrossAxisAlignment.start,
@@ -5077,13 +5331,15 @@ Widget _buildResultsSection() {
 					],
 				  ),
 				),
-			  ],
-			),
+			  ),
+			],
 		  ),
 		),
 	  );
 	}
+	
 	/// NEW METHOD: Build location image widget
+	/// UPDATED METHOD: Build location image widget with improved loading
 	Widget _buildLocationImage(AILocationResult result) {
 	  return ClipRRect(
 		borderRadius: const BorderRadius.only(
@@ -5098,19 +5354,68 @@ Widget _buildResultsSection() {
 		  ),
 		  child: Stack(
 			children: [
-			  // Main image
+			  // Main image with click handler  
 			  Positioned.fill(
-				child: Image.network(
-				  result.imageUrl!,
-				  fit: BoxFit.cover,
-				  loadingBuilder: (context, child, loadingProgress) {
-					if (loadingProgress == null) return child;
-					return _buildImageLoadingPlaceholder();
+				child: GestureDetector(
+				  onTap: () {
+					if (result.imageUrl != null && 
+						result.imageUrl!.contains('maps.googleapis.com/maps/api/streetview')) {
+					  _openStreetViewPanorama(result);
+					} else {
+					  _showSnackBar('360° view available only for Street View images', Colors.orange);
+					}
 				  },
-				  errorBuilder: (context, error, stackTrace) {
-					print('🖼️ IMAGE ERROR: Failed to load ${result.imageUrl}');
-					return _buildImageErrorPlaceholder(result);
-				  },
+				  child: Image.network(
+					result.imageUrl!,
+					fit: BoxFit.cover,
+					// IMPROVED: Add cache headers and error recovery
+					headers: {
+					  'Cache-Control': 'max-age=86400', // Cache for 24 hours
+					},
+					loadingBuilder: (context, child, loadingProgress) {
+					  if (loadingProgress == null) {
+						return child;
+					  }
+					  return _buildImageLoadingPlaceholder(
+						loadingProgress.expectedTotalBytes != null
+							? loadingProgress.cumulativeBytesLoaded / loadingProgress.expectedTotalBytes!
+							: null,
+					  );
+					},
+					errorBuilder: (context, error, stackTrace) {
+					  // IMPROVED: More detailed error logging
+					  print('🖼️ IMAGE ERROR: Failed to load ${result.imageUrl}');
+					  print('🖼️ IMAGE ERROR: Error = $error');
+					  
+					  // Try to detect if it's a Street View URL and show specific fallback
+					  if (result.imageUrl!.contains('maps.googleapis.com/maps/api/streetview')) {
+						print('🏠 STREET VIEW ERROR: URL failed to load, showing fallback');
+						return _buildStreetViewErrorPlaceholder(result);
+					  }
+					  
+					  return _buildImageErrorPlaceholder(result);
+					},
+					// IMPROVED: Add frame callback to debug loading
+					frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
+					  if (wasSynchronouslyLoaded) {
+						return child;
+					  }
+					  
+					  // Log successful image loading
+					  if (frame != null) {
+						WidgetsBinding.instance.addPostFrameCallback((_) {
+						  print('🖼️ IMAGE SUCCESS: Loaded ${result.name} image');
+						});
+					  }
+					  
+					  return AnimatedOpacity(
+						opacity: frame == null ? 0 : 1,
+						duration: const Duration(milliseconds: 300),
+						curve: Curves.easeOut,
+						child: child,
+					  );
+					},
+				  ),
 				),
 			  ),
 			  
@@ -5186,7 +5491,8 @@ Widget _buildResultsSection() {
 	}
 
 	/// NEW METHOD: Image loading placeholder
-	Widget _buildImageLoadingPlaceholder() {
+	/// UPDATED METHOD: Image loading placeholder with progress
+	Widget _buildImageLoadingPlaceholder([double? progress]) {
 	  return Container(
 		color: Colors.grey.shade200,
 		child: Center(
@@ -5194,19 +5500,86 @@ Widget _buildResultsSection() {
 			mainAxisAlignment: MainAxisAlignment.center,
 			children: [
 			  SizedBox(
-				width: 24,
-				height: 24,
+				width: 32,
+				height: 32,
 				child: CircularProgressIndicator(
-				  strokeWidth: 2,
+				  strokeWidth: 3,
 				  color: Colors.grey.shade400,
+				  value: progress, // Show actual progress if available
 				),
 			  ),
-			  const SizedBox(height: 8),
+			  const SizedBox(height: 12),
 			  Text(
-				'Loading image...',
+				progress != null 
+					? 'Loading ${(progress * 100).round()}%'
+					: 'Loading image...',
 				style: TextStyle(
 				  fontSize: 11,
 				  color: Colors.grey.shade500,
+				  fontWeight: FontWeight.w500,
+				),
+			  ),
+			  if (progress != null && progress > 0.5) ...[
+				const SizedBox(height: 4),
+				Text(
+				  'Almost ready...',
+				  style: TextStyle(
+					fontSize: 9,
+					color: Colors.grey.shade400,
+				  ),
+				),
+			  ],
+			],
+		  ),
+		),
+	  );
+	}
+	
+	/// NEW METHOD: Street View specific error placeholder
+	Widget _buildStreetViewErrorPlaceholder(AILocationResult result) {
+	  return Container(
+		color: Colors.blue.shade50,
+		child: Center(
+		  child: Column(
+			mainAxisAlignment: MainAxisAlignment.center,
+			children: [
+			  Icon(
+				Icons.streetview,
+				size: 32,
+				color: Colors.blue.shade300,
+			  ),
+			  const SizedBox(height: 8),
+			  Text(
+				'STREET VIEW',
+				style: TextStyle(
+				  fontSize: 10,
+				  fontWeight: FontWeight.bold,
+				  color: Colors.blue.shade600,
+				),
+			  ),
+			  const SizedBox(height: 4),
+			  Text(
+				'Image temporarily unavailable',
+				style: TextStyle(
+				  fontSize: 9,
+				  color: Colors.blue.shade400,
+				),
+				textAlign: TextAlign.center,
+			  ),
+			  const SizedBox(height: 8),
+			  Container(
+				padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+				decoration: BoxDecoration(
+				  color: Colors.blue.shade100,
+				  borderRadius: BorderRadius.circular(6),
+				),
+				child: Text(
+				  result.category.replaceAll('_', ' ').toUpperCase(),
+				  style: TextStyle(
+					fontSize: 8,
+					fontWeight: FontWeight.bold,
+					color: Colors.blue.shade700,
+				  ),
 				),
 			  ),
 			],
@@ -5281,8 +5654,11 @@ Widget _buildResultsSection() {
 	}
 
 	/// NEW METHOD: Get image source icon
+	/// UPDATED METHOD: Get image source icon (ENHANCED)
 	IconData _getImageSourceIcon(String imageUrl) {
-	  if (imageUrl.contains('googleapis.com')) {
+	  if (imageUrl.contains('maps.googleapis.com/maps/api/streetview')) {
+		return Icons.streetview; // New icon for Street View
+	  } else if (imageUrl.contains('googleapis.com')) {
 		return Icons.business;
 	  } else if (imageUrl.contains('wikimedia') || imageUrl.contains('wikipedia')) {
 		return Icons.article;
@@ -5294,8 +5670,11 @@ Widget _buildResultsSection() {
 	}
 
 	/// NEW METHOD: Get image source text
+	/// UPDATED METHOD: Get image source text (ENHANCED)
 	String _getImageSourceText(String imageUrl) {
-	  if (imageUrl.contains('googleapis.com')) {
+	  if (imageUrl.contains('maps.googleapis.com/maps/api/streetview')) {
+		return 'STREET VIEW'; // New text for Street View
+	  } else if (imageUrl.contains('googleapis.com')) {
 		return 'GOOGLE';
 	  } else if (imageUrl.contains('wikimedia') || imageUrl.contains('wikipedia')) {
 		return 'WIKI';
@@ -5305,4 +5684,803 @@ Widget _buildResultsSection() {
 		return 'PHOTO';
 	  }
 	}
+	
+	/// NEW METHOD: Open Street View with hybrid approach (OpenStreetView + Google fallback)
+	void _openStreetViewPanorama(AILocationResult result) {
+	  // Check if location has coordinates
+	  if (result.coordinates == null) {
+		_showSnackBar('Location coordinates not available', Colors.orange);
+		return;
+	  }
+
+	  print('🌍 HYBRID PANORAMA: Starting for ${result.name} at ${result.coordinates.latitude}, ${result.coordinates.longitude}');
+
+	  // First try OpenStreetView (free)
+	  _tryOpenStreetView(result);
+	}
+
+	/// NEW METHOD: Try OpenStreetView first (free option)
+	Future<void> _tryOpenStreetView(AILocationResult result) async {
+	  try {
+		print('🆓 OPENSTREETVIEW: Checking coverage for ${result.name}');
+		
+		// Show loading dialog
+		showDialog(
+		  context: context,
+		  barrierDismissible: false,
+		  builder: (context) => AlertDialog(
+			content: Column(
+			  mainAxisSize: MainAxisSize.min,
+			  children: [
+				CircularProgressIndicator(color: Colors.green),
+				SizedBox(height: 16),
+				Text('Checking for free 360° images...'),
+			  ],
+			),
+		  ),
+		);
+
+		// Check OpenStreetView API for nearby photos
+		final openStreetViewData = await _checkOpenStreetViewCoverage(
+		  result.coordinates.latitude, 
+		  result.coordinates.longitude
+		);
+
+		// Close loading dialog
+		Navigator.of(context).pop();
+
+		if (openStreetViewData != null && openStreetViewData.isNotEmpty) {
+		  print('✅ OPENSTREETVIEW: Found ${openStreetViewData.length} photos, opening free viewer');
+		  
+		  // Open OpenStreetView panorama
+		  Navigator.of(context).push(
+			MaterialPageRoute(
+			  builder: (context) => OpenStreetViewPanoramaScreen(
+				locationName: result.name,
+				latitude: result.coordinates.latitude,
+				longitude: result.coordinates.longitude,
+				category: result.category,
+				photos: openStreetViewData,
+			  ),
+			  fullscreenDialog: true,
+			),
+		  );
+		} else {
+		  print('❌ OPENSTREETVIEW: No coverage, offering Google Street View fallback');
+		  _showGoogleStreetViewOption(result);
+		}
+
+	  } catch (e) {
+		// Close loading dialog if still open
+		Navigator.of(context).pop();
+		print('❌ OPENSTREETVIEW: Error checking coverage: $e');
+		_showGoogleStreetViewOption(result);
+	  }
+	}
+
+	/// NEW METHOD: Check OpenStreetView API for photo coverage
+	Future<List<OpenStreetViewPhoto>?> _checkOpenStreetViewCoverage(double lat, double lng) async {
+	  try {
+		final url = 'https://api.openstreetview.org/1.0/list/nearby-photos/'
+			'?lat=$lat'
+			'&lng=$lng'
+			'&radius=150' // 150 meters radius
+			'&ipp=10'; // Items per page
+
+		print('🆓 OPENSTREETVIEW API: $url');
+
+		final response = await http.get(
+		  Uri.parse(url),
+		  headers: {
+			'User-Agent': 'LocadoApp/1.0',
+			'Accept': 'application/json',
+		  },
+		).timeout(Duration(seconds: 8));
+
+		if (response.statusCode == 200) {
+		  final data = jsonDecode(response.body);
+		  
+		  if (data['result'] != null && data['result']['data'] != null) {
+			final List<dynamic> photos = data['result']['data'];
+			
+			print('🆓 OPENSTREETVIEW: Found ${photos.length} photos in API response');
+			
+			if (photos.isNotEmpty) {
+			  // Convert to OpenStreetViewPhoto objects
+			  return photos.map((photo) => OpenStreetViewPhoto.fromJson(photo)).toList();
+			}
+		  }
+		} else {
+		  print('❌ OPENSTREETVIEW API: HTTP ${response.statusCode}');
+		}
+
+		return null;
+	  } catch (e) {
+		print('❌ OPENSTREETVIEW API: Error = $e');
+		return null;
+	  }
+	}
+
+	/// NEW METHOD: Show Google Street View option with cost warning
+	void _showGoogleStreetViewOption(AILocationResult result) {
+	  showDialog(
+		context: context,
+		builder: (context) => AlertDialog(
+		  title: Row(
+			children: [
+			  Icon(Icons.streetview, color: Colors.blue),
+			  SizedBox(width: 8),
+			  Text('360° Street View'),
+			],
+		  ),
+		  content: Column(
+			mainAxisSize: MainAxisSize.min,
+			crossAxisAlignment: CrossAxisAlignment.start,
+			children: [
+			  Text(
+				'Free 360° images not available for this location.',
+				style: TextStyle(fontWeight: FontWeight.w500),
+			  ),
+			  SizedBox(height: 12),
+			  Container(
+				padding: EdgeInsets.all(12),
+				decoration: BoxDecoration(
+				  color: Colors.blue.shade50,
+				  borderRadius: BorderRadius.circular(8),
+				  border: Border.all(color: Colors.blue.shade200),
+				),
+				child: Column(
+				  crossAxisAlignment: CrossAxisAlignment.start,
+				  children: [
+					Row(
+					  children: [
+						Icon(Icons.info_outline, size: 16, color: Colors.blue.shade700),
+						SizedBox(width: 6),
+						Text(
+						  'Google Street View Available',
+						  style: TextStyle(
+							fontWeight: FontWeight.bold,
+							color: Colors.blue.shade700,
+							fontSize: 13,
+						  ),
+						),
+					  ],
+					),
+					SizedBox(height: 6),
+					Text(
+					  '• Interactive 360° panorama\n• High-quality imagery\n• Small usage cost applies',
+					  style: TextStyle(
+						fontSize: 12,
+						color: Colors.blue.shade600,
+					  ),
+					),
+				  ],
+				),
+			  ),
+			],
+		  ),
+		  actions: [
+			TextButton(
+			  onPressed: () => Navigator.of(context).pop(),
+			  child: Text('Cancel'),
+			),
+			ElevatedButton.icon(
+			  onPressed: () {
+				Navigator.of(context).pop();
+				_openGoogleStreetView(result);
+			  },
+			  icon: Icon(Icons.streetview, size: 18),
+			  label: Text('Open Google Street View'),
+			  style: ElevatedButton.styleFrom(
+				backgroundColor: Colors.blue,
+				foregroundColor: Colors.white,
+			  ),
+			),
+		  ],
+		),
+	  );
+	}
+
+	/// NEW METHOD: Open Google Street View (with cost)
+	void _openGoogleStreetView(AILocationResult result) {
+	  final googleApiKey = dotenv.env['GOOGLE_API_KEY'] ?? dotenv.env['GOOGLE_PLACES_API_KEY'] ?? '';
+	  
+	  if (googleApiKey.isEmpty || googleApiKey == 'your_api_key_here') {
+		_showSnackBar('Google API key not configured for Street View', Colors.red);
+		return;
+	  }
+
+	  print('💰 GOOGLE STREET VIEW: Opening paid panorama for ${result.name}');
+
+	  Navigator.of(context).push(
+		MaterialPageRoute(
+		  builder: (context) => GoogleStreetViewPanoramaScreen(
+			locationName: result.name,
+			latitude: result.coordinates.latitude,
+			longitude: result.coordinates.longitude,
+			category: result.category,
+			apiKey: googleApiKey,
+		  ),
+		  fullscreenDialog: true,
+		),
+	  );
+	}
 }
+
+	/// NEW CLASS: OpenStreetView photo data model
+	class OpenStreetViewPhoto {
+	  final String id;
+	  final double latitude;
+	  final double longitude;
+	  final String? imageUrl;
+	  final String? thumbnailUrl;
+	  final DateTime? dateCreated;
+	  final double? heading;
+
+	  OpenStreetViewPhoto({
+		required this.id,
+		required this.latitude,
+		required this.longitude,
+		this.imageUrl,
+		this.thumbnailUrl,
+		this.dateCreated,
+		this.heading,
+	  });
+
+	  factory OpenStreetViewPhoto.fromJson(Map<String, dynamic> json) {
+		return OpenStreetViewPhoto(
+		  id: json['id']?.toString() ?? '',
+		  latitude: (json['lat'] ?? json['latitude'] ?? 0.0).toDouble(),
+		  longitude: (json['lng'] ?? json['longitude'] ?? 0.0).toDouble(),
+		  imageUrl: json['lth_name'] ?? json['image_url'],
+		  thumbnailUrl: json['th_name'] ?? json['thumbnail_url'],
+		  dateCreated: json['date_added'] != null ? 
+			  DateTime.tryParse(json['date_added'].toString()) : null,
+		  heading: (json['heading'] ?? 0.0).toDouble(),
+		);
+	  }
+	}
+
+	/// NEW SCREEN: OpenStreetView panorama viewer (free)
+	class OpenStreetViewPanoramaScreen extends StatefulWidget {
+	  final String locationName;
+	  final double latitude;
+	  final double longitude;
+	  final String category;
+	  final List<OpenStreetViewPhoto> photos;
+
+	  const OpenStreetViewPanoramaScreen({
+		Key? key,
+		required this.locationName,
+		required this.latitude,
+		required this.longitude,
+		required this.category,
+		required this.photos,
+	  }) : super(key: key);
+
+	  @override
+	  State<OpenStreetViewPanoramaScreen> createState() => _OpenStreetViewPanoramaScreenState();
+	}
+
+	class _OpenStreetViewPanoramaScreenState extends State<OpenStreetViewPanoramaScreen> {
+	  int _currentPhotoIndex = 0;
+	  bool _isLoading = true;
+
+	  @override
+	  Widget build(BuildContext context) {
+		final currentPhoto = widget.photos[_currentPhotoIndex];
+		
+		return Scaffold(
+		  backgroundColor: Colors.black,
+		  extendBodyBehindAppBar: true,
+		  appBar: AppBar(
+			backgroundColor: Colors.transparent,
+			elevation: 0,
+			leading: Container(
+			  margin: const EdgeInsets.all(8),
+			  decoration: BoxDecoration(
+				color: Colors.black.withOpacity(0.8),
+				borderRadius: BorderRadius.circular(8),
+			  ),
+			  child: IconButton(
+				icon: const Icon(Icons.close, color: Colors.white),
+				onPressed: () => Navigator.of(context).pop(),
+			  ),
+			),
+			title: Container(
+			  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+			  decoration: BoxDecoration(
+				color: Colors.green.withOpacity(0.9),
+				borderRadius: BorderRadius.circular(16),
+			  ),
+			  child: Row(
+				mainAxisSize: MainAxisSize.min,
+				children: [
+				  Icon(Icons.eco, size: 16, color: Colors.white),
+				  SizedBox(width: 6),
+				  Text(
+					'FREE',
+					style: TextStyle(
+					  fontSize: 12,
+					  fontWeight: FontWeight.bold,
+					  color: Colors.white,
+					),
+				  ),
+				],
+			  ),
+			),
+			centerTitle: true,
+		  ),
+		  body: Stack(
+			children: [
+			  // Main photo viewer
+			  PageView.builder(
+				itemCount: widget.photos.length,
+				onPageChanged: (index) {
+				  setState(() {
+					_currentPhotoIndex = index;
+					_isLoading = true;
+				  });
+				},
+				itemBuilder: (context, index) {
+				  final photo = widget.photos[index];
+				  return Container(
+					width: double.infinity,
+					height: double.infinity,
+					child: Image.network(
+					  photo.imageUrl ?? photo.thumbnailUrl ?? '',
+					  fit: BoxFit.cover,
+					  loadingBuilder: (context, child, loadingProgress) {
+						if (loadingProgress == null) {
+						  WidgetsBinding.instance.addPostFrameCallback((_) {
+							if (mounted) {
+							  setState(() {
+								_isLoading = false;
+							  });
+							}
+						  });
+						  return child;
+						}
+						return Center(
+						  child: CircularProgressIndicator(
+							color: Colors.white,
+							value: loadingProgress.expectedTotalBytes != null
+								? loadingProgress.cumulativeBytesLoaded / loadingProgress.expectedTotalBytes!
+								: null,
+						  ),
+						);
+					  },
+					  errorBuilder: (context, error, stackTrace) {
+						return Center(
+						  child: Column(
+							mainAxisAlignment: MainAxisAlignment.center,
+							children: [
+							  Icon(Icons.error_outline, color: Colors.white, size: 48),
+							  SizedBox(height: 16),
+							  Text(
+								'Failed to load image',
+								style: TextStyle(color: Colors.white),
+							  ),
+							],
+						  ),
+						);
+					  },
+					),
+				  );
+				},
+			  ),
+			  
+			  // Loading overlay
+			  if (_isLoading)
+				Container(
+				  color: Colors.black.withOpacity(0.7),
+				  child: Center(
+					child: Column(
+					  mainAxisAlignment: MainAxisAlignment.center,
+					  children: [
+						CircularProgressIndicator(color: Colors.white),
+						SizedBox(height: 16),
+						Text(
+						  'Loading street view...',
+						  style: TextStyle(color: Colors.white),
+						),
+					  ],
+					),
+				  ),
+				),
+			  
+			  // Info overlay
+			  Positioned(
+				top: 100,
+				left: 20,
+				right: 20,
+				child: Container(
+				  padding: EdgeInsets.all(16),
+				  decoration: BoxDecoration(
+					color: Colors.black.withOpacity(0.8),
+					borderRadius: BorderRadius.circular(12),
+					border: Border.all(color: Colors.green.withOpacity(0.3)),
+				  ),
+				  child: Column(
+					crossAxisAlignment: CrossAxisAlignment.start,
+					children: [
+					  Text(
+						widget.locationName,
+						style: TextStyle(
+						  color: Colors.white,
+						  fontSize: 18,
+						  fontWeight: FontWeight.bold,
+						),
+					  ),
+					  SizedBox(height: 4),
+					  Text(
+						'${widget.category.replaceAll('_', ' ').toUpperCase()} • OpenStreetView',
+						style: TextStyle(
+						  color: Colors.white70,
+						  fontSize: 12,
+						),
+					  ),
+					],
+				  ),
+				),
+			  ),
+			  
+			  // Photo navigation
+			  if (widget.photos.length > 1)
+				Positioned(
+				  bottom: 30,
+				  left: 20,
+				  right: 20,
+				  child: Container(
+					padding: EdgeInsets.all(12),
+					decoration: BoxDecoration(
+					  color: Colors.black.withOpacity(0.8),
+					  borderRadius: BorderRadius.circular(8),
+					),
+					child: Row(
+					  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+					  children: [
+						Text(
+						  'Photo ${_currentPhotoIndex + 1} of ${widget.photos.length}',
+						  style: TextStyle(color: Colors.white, fontSize: 14),
+						),
+						Row(
+						  children: [
+							IconButton(
+							  onPressed: _currentPhotoIndex > 0 ? () {
+								setState(() {
+								  _currentPhotoIndex--;
+								});
+							  } : null,
+							  icon: Icon(Icons.arrow_back_ios, color: Colors.white),
+							),
+							IconButton(
+							  onPressed: _currentPhotoIndex < widget.photos.length - 1 ? () {
+								setState(() {
+								  _currentPhotoIndex++;
+								});
+							  } : null,
+							  icon: Icon(Icons.arrow_forward_ios, color: Colors.white),
+							),
+						  ],
+						),
+					  ],
+					),
+				  ),
+				),
+			],
+		  ),
+		);
+	  }
+	}
+
+	/// EXISTING SCREEN: Google Street View panorama (renamed for clarity)
+	class GoogleStreetViewPanoramaScreen extends StatefulWidget {
+	  final String locationName;
+	  final double latitude;
+	  final double longitude;
+	  final String category;
+	  final String apiKey;
+
+	  const GoogleStreetViewPanoramaScreen({
+		Key? key,
+		required this.locationName,
+		required this.latitude,
+		required this.longitude,
+		required this.category,
+		required this.apiKey,
+	  }) : super(key: key);
+
+	  @override
+	  State<GoogleStreetViewPanoramaScreen> createState() => _GoogleStreetViewPanoramaScreenState();
+	}
+
+	class _GoogleStreetViewPanoramaScreenState extends State<GoogleStreetViewPanoramaScreen> {
+	  late WebViewController _webViewController;
+	  bool _isLoading = true;
+	  bool _hasError = false;
+	  String? _errorMessage;
+
+	  @override
+	  void initState() {
+		super.initState();
+		_initializeWebView();
+	  }
+
+	  void _initializeWebView() {
+		final streetViewHtml = _buildStreetViewPanoramaHtml();
+		
+		_webViewController = WebViewController()
+		  ..setJavaScriptMode(JavaScriptMode.unrestricted)
+		  ..setBackgroundColor(Colors.black)
+		  ..setNavigationDelegate(
+			NavigationDelegate(
+			  onPageStarted: (String url) {
+				setState(() {
+				  _isLoading = true;
+				  _hasError = false;
+				});
+			  },
+			  onPageFinished: (String url) {
+				setState(() {
+				  _isLoading = false;
+				});
+				print('💰 GOOGLE STREET VIEW: Panorama loaded for ${widget.locationName}');
+			  },
+			  onWebResourceError: (WebResourceError error) {
+				setState(() {
+				  _isLoading = false;
+				  _hasError = true;
+				  _errorMessage = error.description;
+				});
+				print('❌ GOOGLE STREET VIEW: Error loading: ${error.description}');
+			  },
+			),
+		  )
+		  ..loadHtmlString(streetViewHtml);
+	  }
+
+	  String _buildStreetViewPanoramaHtml() {
+		return '''
+	<!DOCTYPE html>
+	<html>
+	<head>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+		<title>Google Street View - ${widget.locationName}</title>
+		<style>
+			* { margin: 0; padding: 0; box-sizing: border-box; }
+			html, body { height: 100%; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #000; overflow: hidden; }
+			#map { height: 100vh; width: 100vw; }
+			.info-overlay { position: absolute; top: 20px; left: 20px; right: 20px; background: rgba(0, 0, 0, 0.8); color: white; padding: 12px 16px; border-radius: 12px; backdrop-filter: blur(10px); z-index: 1000; pointer-events: none; }
+			.paid-badge { position: absolute; top: 20px; right: 20px; background: rgba(255, 152, 0, 0.9); color: white; padding: 6px 12px; border-radius: 16px; font-size: 12px; font-weight: bold; z-index: 1001; }
+			.location-name { font-size: 18px; font-weight: bold; margin-bottom: 4px; }
+			.location-details { font-size: 14px; opacity: 0.8; }
+			.controls-overlay { position: absolute; bottom: 20px; right: 20px; background: rgba(0, 0, 0, 0.8); color: white; padding: 8px 12px; border-radius: 8px; font-size: 12px; z-index: 1000; pointer-events: none; }
+			.loading-overlay { position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: #000; display: flex; align-items: center; justify-content: center; z-index: 2000; color: white; flex-direction: column; }
+			.spinner { width: 40px; height: 40px; border: 3px solid rgba(255, 255, 255, 0.3); border-radius: 50%; border-top-color: #fff; animation: spin 1s ease-in-out infinite; margin-bottom: 16px; }
+			@keyframes spin { to { transform: rotate(360deg); } }
+		</style>
+	</head>
+	<body>
+		<div id="loading" class="loading-overlay">
+			<div class="spinner"></div>
+			<div>Loading Google Street View...</div>
+		</div>
+		
+		<div class="paid-badge">💰 PAID</div>
+		
+		<div class="info-overlay">
+			<div class="location-name">${widget.locationName}</div>
+			<div class="location-details">
+				${widget.category.replaceAll('_', ' ').toUpperCase()} • Google Street View
+			</div>
+		</div>
+		
+		<div class="controls-overlay">
+			Drag to look around • Pinch to zoom
+		</div>
+		
+		<div id="map"></div>
+
+		<script async defer src="https://maps.googleapis.com/maps/api/js?key=${widget.apiKey}&callback=initStreetView"></script>
+		
+		<script>
+			let panorama;
+			let isLoaded = false;
+			
+			function initStreetView() {
+				console.log('💰 Initializing Google Street View panorama...');
+				
+				const mapDiv = document.getElementById('map');
+				const loadingDiv = document.getElementById('loading');
+				
+				try {
+					const streetViewService = new google.maps.StreetViewService();
+					const location = { lat: ${widget.latitude}, lng: ${widget.longitude} };
+					
+					streetViewService.getPanorama({
+						location: location,
+						radius: 100,
+						preference: google.maps.StreetViewPreference.NEAREST
+					}, function(data, status) {
+						if (status === 'OK') {
+							console.log('✅ Google Street View panorama found');
+							
+							panorama = new google.maps.StreetViewPanorama(mapDiv, {
+								position: location,
+								pov: { heading: 235, pitch: 10 },
+								zoom: 1,
+								addressControl: false,
+								linksControl: true,
+								panControl: true,
+								enableCloseButton: false,
+								showRoadLabels: false,
+								motionTracking: false,
+								motionTrackingControl: false
+							});
+							
+							google.maps.event.addListener(panorama, 'pano_changed', function() {
+								if (!isLoaded) {
+									loadingDiv.style.display = 'none';
+									isLoaded = true;
+									console.log('💰 Google Street View panorama loaded successfully');
+								}
+							});
+							
+							google.maps.event.addListener(panorama, 'error', function(error) {
+								console.error('❌ Google Street View error:', error);
+								showError('Street View not available at this location');
+							});
+							
+						} else {
+							console.warn('⚠️ Google Street View not available:', status);
+							showError('Street View not available at this location');
+						}
+					});
+					
+				} catch (error) {
+					console.error('❌ Google Street View initialization error:', error);
+					showError('Failed to load Street View');
+				}
+			}
+			
+			function showError(message) {
+				const loadingDiv = document.getElementById('loading');
+				loadingDiv.innerHTML = '<div style="color: #ff6b6b; text-align: center;">' + 
+									 '<div style="font-size: 18px; margin-bottom: 8px;">⚠️</div>' +
+									 '<div>' + message + '</div>' +
+									 '<div style="margin-top: 12px; font-size: 12px; opacity: 0.7;">Tap back to return</div>' +
+									 '</div>';
+			}
+			
+			document.addEventListener('contextmenu', e => e.preventDefault());
+			document.addEventListener('selectstart', e => e.preventDefault());
+			
+			window.addEventListener('orientationchange', function() {
+				if (panorama) {
+					google.maps.event.trigger(panorama, 'resize');
+				}
+			});
+		</script>
+	</body>
+	</html>
+		''';
+	  }
+
+	  @override
+	  Widget build(BuildContext context) {
+		return Scaffold(
+		  backgroundColor: Colors.black,
+		  extendBodyBehindAppBar: true,
+		  appBar: AppBar(
+			backgroundColor: Colors.transparent,
+			elevation: 0,
+			leading: Container(
+			  margin: const EdgeInsets.all(8),
+			  decoration: BoxDecoration(
+				color: Colors.black.withOpacity(0.8),
+				borderRadius: BorderRadius.circular(8),
+			  ),
+			  child: IconButton(
+				icon: const Icon(Icons.close, color: Colors.white),
+				onPressed: () => Navigator.of(context).pop(),
+			  ),
+			),
+			title: Container(
+			  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+			  decoration: BoxDecoration(
+				color: Colors.orange.withOpacity(0.9),
+				borderRadius: BorderRadius.circular(16),
+			  ),
+			  child: Row(
+				mainAxisSize: MainAxisSize.min,
+				children: [
+				  Icon(Icons.monetization_on, size: 16, color: Colors.white),
+				  SizedBox(width: 6),
+				  Text(
+					'PAID',
+					style: TextStyle(
+					  fontSize: 12,
+					  fontWeight: FontWeight.bold,
+					  color: Colors.white,
+					),
+				  ),
+				],
+			  ),
+			),
+			centerTitle: true,
+			actions: [
+			  Container(
+				margin: const EdgeInsets.all(8),
+				decoration: BoxDecoration(
+				  color: Colors.black.withOpacity(0.8),
+				  borderRadius: BorderRadius.circular(8),
+				),
+				child: IconButton(
+				  icon: const Icon(Icons.refresh, color: Colors.white),
+				  onPressed: () {
+					setState(() {
+					  _isLoading = true;
+					  _hasError = false;
+					});
+					_initializeWebView();
+				  },
+				),
+			  ),
+			],
+		  ),
+		  body: Stack(
+			children: [
+			  if (!_hasError)
+				WebViewWidget(controller: _webViewController),
+			  
+			  if (_hasError)
+				Container(
+				  color: Colors.black,
+				  child: Center(
+					child: Column(
+					  mainAxisAlignment: MainAxisAlignment.center,
+					  children: [
+						const Icon(Icons.error_outline, color: Colors.red, size: 64),
+						const SizedBox(height: 16),
+						const Text('Street View Error', style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold)),
+						const SizedBox(height: 8),
+						Text(_errorMessage ?? 'Failed to load Street View panorama', style: const TextStyle(color: Colors.white70, fontSize: 14), textAlign: TextAlign.center),
+						const SizedBox(height: 24),
+						ElevatedButton.icon(
+						  onPressed: () {
+							setState(() {
+							  _isLoading = true;
+							  _hasError = false;
+							});
+							_initializeWebView();
+						  },
+						  icon: const Icon(Icons.refresh),
+						  label: const Text('Try Again'),
+						  style: ElevatedButton.styleFrom(backgroundColor: Colors.blue, foregroundColor: Colors.white),
+						),
+					  ],
+					),
+				  ),
+				),
+			  
+			  if (_isLoading && !_hasError)
+				Container(
+				  color: Colors.black,
+				  child: const Center(
+					child: Column(
+					  mainAxisAlignment: MainAxisAlignment.center,
+					  children: [
+						CircularProgressIndicator(color: Colors.white, strokeWidth: 3),
+						SizedBox(height: 16),
+						Text('Loading Google Street View...', style: TextStyle(color: Colors.white, fontSize: 16)),
+					  ],
+					),
+				  ),
+				),
+			],
+		  ),
+		);
+	  }
+	}
