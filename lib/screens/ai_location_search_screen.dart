@@ -4246,79 +4246,44 @@ out center meta;
 	// ==================== END OPTIMIZED QUICK SEARCH METHODS ====================
 	
 	
-	/// Open location directly in Google Street View mode
+	/// Open Google Maps with marker (app or web) - SIMPLE AND FREE
 	Future<void> _openInGoogleMaps(AILocationResult result) async {
 	  try {
 		final lat = result.coordinates.latitude;
 		final lng = result.coordinates.longitude;
 		final locationName = Uri.encodeComponent(result.name);
 		
-		print('🗺️ STREET VIEW: Opening ${result.name} directly in Street View mode');
+		print('🗺️ FINAL: Opening Google Maps with marker for ${result.name}');
 		
-		// Try Google Maps Street View directly in app
-		final streetViewAppUrl = 'google.streetview:cbll=$lat,$lng&cbp=0,0,0,0,0';
+		// Try Google Maps app first
+		final googleMapsAppUrl = 'comgooglemaps://?q=$locationName&center=$lat,$lng&zoom=18';
 		
-		if (await canLaunchUrl(Uri.parse(streetViewAppUrl))) {
-		  print('📱 STREET VIEW: Opening Google Maps app in Street View mode');
+		if (await canLaunchUrl(Uri.parse(googleMapsAppUrl))) {
+		  print('📱 FINAL: Opening Google Maps app with marker');
 		  await launchUrl(
-			Uri.parse(streetViewAppUrl),
+			Uri.parse(googleMapsAppUrl),
 			mode: LaunchMode.externalApplication,
 		  );
+		  _showSnackBar('Opened ${result.name} in Google Maps. Tap marker for Street View!', Colors.green);
 		  return;
 		}
 		
-		// Fallback 1: Google Maps app with Street View layer
-		final googleMapsStreetViewUrl = 'comgooglemaps://?center=$lat,$lng&mapmode=streetview&zoom=18';
+		// Fallback to web Google Maps with marker
+		//final webMapsUrl = 'https://www.google.com/maps/search/$lat,$lng?query=$lat,$lng';
+		final webMapsUrl = 'https://www.google.com/maps/search/${Uri.decodeComponent(locationName)}+$lat,$lng';
 		
-		if (await canLaunchUrl(Uri.parse(googleMapsStreetViewUrl))) {
-		  print('📱 STREET VIEW: Opening Google Maps with streetview mapmode');
-		  await launchUrl(
-			Uri.parse(googleMapsStreetViewUrl),
-			mode: LaunchMode.externalApplication,
-		  );
-		  return;
-		}
 		
-		// Fallback 2: Web Street View directly
-		final webStreetViewUrl = 'https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=$lat,$lng';
-		
-		if (await canLaunchUrl(Uri.parse(webStreetViewUrl))) {
-		  print('🌐 STREET VIEW: Opening web Street View directly');
-		  await launchUrl(
-			Uri.parse(webStreetViewUrl),
-			mode: LaunchMode.externalApplication,
-		  );
-		  return;
-		}
-		
-		// Fallback 3: Standard Street View web URL
-		final fallbackStreetViewUrl = 'https://www.google.com/maps/search/?api=1&query=$lat,$lng&layer=c';
-		
-		print('🌐 STREET VIEW: Opening Street View with layer parameter');
+		print('🌐 FINAL: Opening Google Maps web with marker');
 		await launchUrl(
-		  Uri.parse(fallbackStreetViewUrl),
+		  Uri.parse(webMapsUrl),
 		  mode: LaunchMode.externalApplication,
 		);
 		
-		// Show success message
-		_showSnackBar('Opened ${result.name} in Street View', Colors.green);
+		_showSnackBar('Opened ${result.name} in Maps. Tap marker for Street View!', Colors.green);
 		
 	  } catch (e) {
-		print('❌ STREET VIEW: Error opening Street View: $e');
-		_showSnackBar('Could not open Street View. Opening regular map...', Colors.orange);
-		
-		// Ultimate fallback to regular map view - use coordinates from result
-		try {
-		  final lat = result.coordinates.latitude;
-		  final lng = result.coordinates.longitude;
-		  final fallbackMapUrl = 'https://www.google.com/maps/@$lat,$lng,18z';
-		  await launchUrl(
-			Uri.parse(fallbackMapUrl),
-			mode: LaunchMode.externalApplication,
-		  );
-		} catch (e2) {
-		  _showSnackBar('Could not open location in Maps', Colors.red);
-		}
+		print('❌ FINAL: Error opening Google Maps: $e');
+		_showSnackBar('Could not open location in Maps', Colors.red);
 	  }
 	}
 
