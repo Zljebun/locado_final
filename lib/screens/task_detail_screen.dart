@@ -140,166 +140,273 @@ class _TaskDetailScreenState extends State<TaskDetailScreen>
     super.dispose();
   }
 
-  // ✅ NOVA NAVIGACIJA FUNKCIONALNOST - POTPUNO BESPLATNA
-  
-  /// Otvara navigaciju do task lokacije koristeći default navigaciju na telefonu
-  Future<void> _navigateToTask() async {
-    try {
-      final lat = widget.taskLocation.latitude;
-      final lng = widget.taskLocation.longitude;
-      final taskTitle = Uri.encodeComponent(widget.taskLocation.title);
-      
-      // PRISTUP 1: Google Maps sa turn-by-turn navigacijom
-      final googleMapsNavUrl = 'google.navigation:q=$lat,$lng';
-      
-      print('🗺️ NAVIGACIJA: Pokušavam Google Maps navigaciju: $googleMapsNavUrl');
-      
-      if (await canLaunchUrl(Uri.parse(googleMapsNavUrl))) {
-        await launchUrl(
-          Uri.parse(googleMapsNavUrl),
-          mode: LaunchMode.externalApplication,
-        );
-        
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Row(
-                children: [
-                  const Icon(Icons.navigation, color: Colors.white),
-                  const SizedBox(width: 8),
-                  Expanded(child: Text('Opening turn-by-turn navigation to ${widget.taskLocation.title}')),
-                ],
-              ),
-              backgroundColor: Colors.green,
-              duration: const Duration(seconds: 3),
-            ),
-          );
-        }
-        
-        return;
-      }
-      
-      // PRISTUP 2: Waze navigacija
-      final wazeUrl = 'waze://?ll=$lat,$lng&navigate=yes';
-      
-      print('🗺️ NAVIGACIJA: Pokušavam Waze: $wazeUrl');
-      
-      if (await canLaunchUrl(Uri.parse(wazeUrl))) {
-        await launchUrl(
-          Uri.parse(wazeUrl),
-          mode: LaunchMode.externalApplication,
-        );
-        
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Row(
-                children: [
-                  const Icon(Icons.navigation, color: Colors.white),
-                  const SizedBox(width: 8),
-                  Expanded(child: Text('Opening Waze navigation to ${widget.taskLocation.title}')),
-                ],
-              ),
-              backgroundColor: Colors.green,
-              duration: const Duration(seconds: 3),
-            ),
-          );
-        }
-        
-        return;
-      }
-      
-      // PRISTUP 3: Apple Maps sa directions (iOS)
-      if (Platform.isIOS) {
-        final appleMapsDirectionsUrl = 'http://maps.apple.com/?daddr=$lat,$lng&dirflg=d';
-        
-        print('🗺️ NAVIGACIJA: Pokušavam Apple Maps directions: $appleMapsDirectionsUrl');
-        
-        if (await canLaunchUrl(Uri.parse(appleMapsDirectionsUrl))) {
-          await launchUrl(
-            Uri.parse(appleMapsDirectionsUrl),
-            mode: LaunchMode.externalApplication,
-          );
-          
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Row(
-                  children: [
-                    const Icon(Icons.navigation, color: Colors.white),
-                    const SizedBox(width: 8),
-                    Expanded(child: Text('Opening Apple Maps directions to ${widget.taskLocation.title}')),
-                  ],
-                ),
-                backgroundColor: Colors.green,
-                duration: const Duration(seconds: 3),
-              ),
-            );
-          }
-          
-          return;
-        }
-      }
-      
-      // PRISTUP 4: Fallback - Google Maps web sa directions
-      final googleMapsWebDirectionsUrl = 'https://www.google.com/maps/dir/?api=1&destination=$lat,$lng';
-      
-      print('🗺️ NAVIGACIJA: Pokušavam Google Maps web directions: $googleMapsWebDirectionsUrl');
-      
-      if (await canLaunchUrl(Uri.parse(googleMapsWebDirectionsUrl))) {
-        await launchUrl(
-          Uri.parse(googleMapsWebDirectionsUrl),
-          mode: LaunchMode.externalApplication,
-        );
-        
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Opening web directions - Google Maps'),
-              backgroundColor: Colors.blue,
-            ),
-          );
-        }
-        
-        return;
-      }
-      
-      // PRISTUP 5: Poslednji fallback - generic geo URI
-      final geoUri = 'geo:$lat,$lng?q=$lat,$lng($taskTitle)';
-      
-      print('🗺️ NAVIGACIJA: Pokušavam geo URI fallback: $geoUri');
-      
-      if (await canLaunchUrl(Uri.parse(geoUri))) {
-        await launchUrl(
-          Uri.parse(geoUri),
-          mode: LaunchMode.externalApplication,
-        );
-        
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Opening location in default map app'),
-              backgroundColor: Colors.orange,
-            ),
-          );
-        }
-        
-        return;
-      }
-      
-      // Ako ništa ne radi
-      throw Exception('No navigation app available');
-      
-    } catch (e) {
-      print('❌ NAVIGACIJA ERROR: $e');
-      
-      if (mounted) {
-        // Fallback - pokaži koordinate korisniku da može ručno ukucati
-        _showNavigationFallbackDialog();
-      }
-    }
-  }
-  
+	/// Forsira desktop verziju Google Maps-a da izbegne Play Store preusmeravanje
+	Future<void> _navigateToTask() async {
+	  try {
+		final lat = widget.taskLocation.latitude;
+		final lng = widget.taskLocation.longitude;
+		final taskTitle = Uri.encodeComponent(widget.taskLocation.title);
+		
+		// 1. Pokušaj geo URI prvo (može otvoriti pravu navigaciju)
+		final geoUri = 'geo:$lat,$lng?q=$lat,$lng($taskTitle)';
+		
+		print('🗺️ Pokušavam geo URI: $geoUri');
+		
+		try {
+		  if (await canLaunchUrl(Uri.parse(geoUri))) {
+			await launchUrl(
+			  Uri.parse(geoUri),
+			  mode: LaunchMode.externalApplication,
+			);
+			
+			if (mounted) {
+			  ScaffoldMessenger.of(context).showSnackBar(
+				const SnackBar(
+				  content: Text('Opening in map app'),
+				  backgroundColor: Colors.green,
+				),
+			  );
+			}
+			return;
+		  }
+		} catch (e) {
+		  print('Geo URI neuspešan: $e');
+		}
+		
+		// 2. Desktop Google Maps sa forsiranim parametrima
+		final desktopMapsUrl = 'https://maps.google.com/?q=$lat,$lng&navigate=yes&force=desktop';
+		
+		print('🗺️ Pokušavam desktop Google Maps: $desktopMapsUrl');
+		
+		try {
+		  await launchUrl(
+			Uri.parse(desktopMapsUrl),
+			mode: LaunchMode.externalApplication,
+			webViewConfiguration: const WebViewConfiguration(
+			  headers: {
+				'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+			  },
+			),
+		  );
+		  
+		  if (mounted) {
+			ScaffoldMessenger.of(context).showSnackBar(
+			  const SnackBar(
+				content: Text('Opening Google Maps (desktop version)'),
+				backgroundColor: Colors.blue,
+			  ),
+			);
+		  }
+		  return;
+		  
+		} catch (e) {
+		  print('Desktop Google Maps neuspešan: $e');
+		}
+		
+		// 3. OpenStreetMap web navigacija kao alternativa
+		final osmUrl = 'https://www.openstreetmap.org/directions?from=&to=$lat%2C$lng&route=';
+		
+		print('🗺️ Pokušavam OpenStreetMap: $osmUrl');
+		
+		try {
+		  await launchUrl(
+			Uri.parse(osmUrl),
+			mode: LaunchMode.externalApplication,
+		  );
+		  
+		  if (mounted) {
+			ScaffoldMessenger.of(context).showSnackBar(
+			  const SnackBar(
+				content: Text('Opening OpenStreetMap directions'),
+				backgroundColor: Colors.orange,
+			  ),
+			);
+		  }
+		  return;
+		  
+		} catch (e) {
+		  print('OpenStreetMap neuspešan: $e');
+		}
+		
+		// 4. HERE Maps kao alternativa
+		final hereUrl = 'https://wego.here.com/directions/drive//$lat,$lng';
+		
+		print('🗺️ Pokušavam HERE Maps: $hereUrl');
+		
+		try {
+		  await launchUrl(
+			Uri.parse(hereUrl),
+			mode: LaunchMode.externalApplication,
+		  );
+		  
+		  if (mounted) {
+			ScaffoldMessenger.of(context).showSnackBar(
+			  const SnackBar(
+				content: Text('Opening HERE Maps directions'),
+				backgroundColor: Colors.purple,
+			  ),
+			);
+		  }
+		  return;
+		  
+		} catch (e) {
+		  print('HERE Maps neuspešan: $e');
+		}
+		
+		// 5. Poslednji fallback - koordinate
+		throw Exception('All navigation methods failed');
+		
+	  } catch (e) {
+		print('❌ Navigation error: $e');
+		
+		if (mounted) {
+		  _showNavigationFallbackDialog();
+		}
+	  }
+	}
+
+	/// Alternativni pristup - User Choice Dialog sa web opcijama
+	Future<void> _showWebNavigationDialog() async {
+	  final lat = widget.taskLocation.latitude;
+	  final lng = widget.taskLocation.longitude;
+	  final taskTitle = Uri.encodeComponent(widget.taskLocation.title);
+	  
+	  showDialog(
+		context: context,
+		builder: (context) => AlertDialog(
+		  title: const Row(
+			children: [
+			  Icon(Icons.navigation, color: Colors.blue),
+			  SizedBox(width: 8),
+			  Text('Web Navigation'),
+			],
+		  ),
+		  content: Column(
+			mainAxisSize: MainAxisSize.min,
+			children: [
+			  Text('Navigate to: ${widget.taskLocation.title}'),
+			  const SizedBox(height: 16),
+			  const Text('Choose web navigation service:'),
+			],
+		  ),
+		  actions: [
+			TextButton(
+			  onPressed: () => Navigator.pop(context),
+			  child: const Text('Cancel'),
+			),
+			
+			// Google Maps (forsiran desktop)
+			ElevatedButton(
+			  onPressed: () async {
+				Navigator.pop(context);
+				
+				final url = 'https://maps.google.com/?q=$lat,$lng';
+				await launchUrl(
+				  Uri.parse(url),
+				  mode: LaunchMode.externalApplication,
+				);
+			  },
+			  style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
+			  child: const Text('Google Maps'),
+			),
+			
+			// OpenStreetMap
+			ElevatedButton(
+			  onPressed: () async {
+				Navigator.pop(context);
+				
+				final url = 'https://www.openstreetmap.org/?mlat=$lat&mlon=$lng&zoom=15';
+				await launchUrl(
+				  Uri.parse(url),
+				  mode: LaunchMode.externalApplication,
+				);
+			  },
+			  style: ElevatedButton.styleFrom(backgroundColor: Colors.orange),
+			  child: const Text('OpenStreetMap'),
+			),
+			
+			// HERE Maps
+			ElevatedButton(
+			  onPressed: () async {
+				Navigator.pop(context);
+				
+				final url = 'https://wego.here.com/?map=$lat,$lng,15,normal';
+				await launchUrl(
+				  Uri.parse(url),
+				  mode: LaunchMode.externalApplication,
+				);
+			  },
+			  style: ElevatedButton.styleFrom(backgroundColor: Colors.purple),
+			  child: const Text('HERE Maps'),
+			),
+		  ],
+		),
+	  );
+	}
+
+	/// Alternative - Direktno pokaži user-u opcije
+	Future<void> _showNavigationChoiceDialog() async {
+	  final lat = widget.taskLocation.latitude;
+	  final lng = widget.taskLocation.longitude;
+	  
+	  showDialog(
+		context: context,
+		builder: (context) => AlertDialog(
+		  title: const Row(
+			children: [
+			  Icon(Icons.navigation, color: Colors.blue),
+			  SizedBox(width: 8),
+			  Text('Choose Navigation'),
+			],
+		  ),
+		  content: Column(
+			mainAxisSize: MainAxisSize.min,
+			children: [
+			  Text('Navigate to: ${widget.taskLocation.title}'),
+			  const SizedBox(height: 16),
+			  const Text('Choose your preferred navigation method:'),
+			],
+		  ),
+		  actions: [
+			TextButton(
+			  onPressed: () => Navigator.pop(context),
+			  child: const Text('Cancel'),
+			),
+			ElevatedButton(
+			  onPressed: () async {
+				Navigator.pop(context);
+				
+				// Direktno Google Maps web
+				final webUrl = 'https://www.google.com/maps/dir/?api=1&destination=$lat,$lng';
+				await launchUrl(Uri.parse(webUrl), mode: LaunchMode.externalApplication);
+				
+				ScaffoldMessenger.of(context).showSnackBar(
+				  const SnackBar(content: Text('Opening Google Maps web')),
+				);
+			  },
+			  style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
+			  child: const Text('Google Maps'),
+			),
+			ElevatedButton(
+			  onPressed: () async {
+				Navigator.pop(context);
+				
+				// Geo URI za default mapu
+				final geoUri = 'geo:$lat,$lng?q=$lat,$lng(${Uri.encodeComponent(widget.taskLocation.title)})';
+				await launchUrl(Uri.parse(geoUri), mode: LaunchMode.externalApplication);
+				
+				ScaffoldMessenger.of(context).showSnackBar(
+				  const SnackBar(content: Text('Opening default map app')),
+				);
+			  },
+			  style: ElevatedButton.styleFrom(backgroundColor: Colors.blue),
+			  child: const Text('Default Map'),
+			),
+		  ],
+		),
+	  );
+	}
+	
   /// Dialog koji se prikazuje ako navigacija ne radi
   void _showNavigationFallbackDialog() {
     showDialog(
