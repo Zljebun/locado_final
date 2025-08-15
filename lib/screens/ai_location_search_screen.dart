@@ -11,7 +11,7 @@ import '../models/task_location.dart';
 import '../helpers/database_helper.dart';
 import '../location_service.dart';
 import '../widgets/osm_map_widget.dart';
-import 'dart:math';
+import 'dart:math' as math;
 
 // Server health check result
 class ServerHealth {
@@ -79,6 +79,7 @@ class AILocationResult {
   final List<String> taskItems;
   final String category;
   final double? distanceFromUser;
+  final String? imageUrl;
   bool isSelected;
 
   AILocationResult({
@@ -88,6 +89,7 @@ class AILocationResult {
     required this.taskItems,
     required this.category,
     this.distanceFromUser,
+    this.imageUrl,
     this.isSelected = false,
   });
 }
@@ -948,6 +950,7 @@ class _AILocationSearchScreenState extends State<AILocationSearchScreen> {
 				  taskItems: taskItems,
 				  category: amenityType,
 				  distanceFromUser: distance,
+				  imageUrl: null,
 				));
 			  }
 			}
@@ -1010,6 +1013,7 @@ class _AILocationSearchScreenState extends State<AILocationSearchScreen> {
 				taskItems: taskItems,
 				category: type,
 				distanceFromUser: distance,
+				imageUrl: null,
 			  ));
 			}
 		  }
@@ -1238,6 +1242,560 @@ class _AILocationSearchScreenState extends State<AILocationSearchScreen> {
 		return uri.host;
 	  } catch (e) {
 		return url.length > 30 ? '${url.substring(0, 27)}...' : url;
+	  }
+	}
+	
+    /// UPDATED METHOD: Extract image URL with Google Places API fallback
+	Future<String?> _extractImageFromOSMTags(Map<String, dynamic> tags, String locationName, double lat, double lng) async {
+	  try {
+		// Strategy 1: Direct image tag
+		if (tags['image'] != null && tags['image'].toString().isNotEmpty) {
+		  final imageUrl = tags['image'].toString();
+		  if (_isValidImageUrl(imageUrl)) {
+			print('🖼️ OSM IMAGE: Found direct image: $imageUrl');
+			return imageUrl;
+		  }
+		}
+
+		// Strategy 2: Wikimedia Commons tag
+		if (tags['wikimedia_commons'] != null && tags['wikimedia_commons'].toString().isNotEmpty) {
+		  final wikimediaUrl = _convertWikimediaToImageUrl(tags['wikimedia_commons'].toString());
+		  if (wikimediaUrl != null) {
+			print('🖼️ OSM IMAGE: Found Wikimedia image: $wikimediaUrl');
+			return wikimediaUrl;
+		  }
+		}
+
+		// Strategy 3: Wikipedia API integration
+		if (tags['wikipedia'] != null && tags['wikipedia'].toString().isNotEmpty) {
+		  print('🖼️ WIKIPEDIA: Found Wikipedia reference: ${tags['wikipedia']}');
+		  final wikipediaImageUrl = await _getImageFromWikipediaAPI(tags['wikipedia'].toString());
+		  if (wikipediaImageUrl != null) {
+			print('🖼️ WIKIPEDIA: Found Wikipedia image: $wikipediaImageUrl');
+			return wikipediaImageUrl;
+		  }
+		}
+
+		// Strategy 4: Google Places API fallback (NEW)
+		print('🔍 GOOGLE PLACES: No OSM/Wikipedia images, trying Google Places for "$locationName"');
+		final googlePlacesImageUrl = await _getImageFromGooglePlaces(locationName, lat, lng);
+		if (googlePlacesImageUrl != null) {
+		  print('🖼️ GOOGLE PLACES: Found image: $googlePlacesImageUrl');
+		  return googlePlacesImageUrl;
+		}
+
+		// Strategy 5: Website tag (for future web scraping)
+		if (tags['website'] != null && tags['website'].toString().isNotEmpty) {
+		  print('🖼️ OSM IMAGE: Found website: ${tags['website']} (potential image source)');
+		}
+
+		print('🖼️ NO IMAGE: No images found for "$locationName"');
+		return null;
+	  } catch (e) {
+		print('❌ OSM IMAGE: Error extracting image from tags: $e');
+		return null;
+	  }
+	}
+
+	/// NEW METHOD: Get image from Google Places API
+	Future<String?> _getImageFromGooglePlaces(String locationName, double lat, double lng) async {
+	  try {
+		final googlePlacesApiKey = dotenv.env['GOOGLE_PLACES_API_KEY'] ?? '';
+		
+		if (googlePlacesApiKey.isEmpty || googlePlacesApiKey == 'your_api_key_here') {
+		  print('❌ GOOGLE PLACES: API key not configured');
+		  return null;
+		}
+
+		// Step 1: Find Place using Nearby Search
+		final placeId = await _findGooglePlace(locationName, lat, lng, googlePlacesApiKey);
+		if (placeId == null) {
+		  print('🔍 GOOGLE PLACES: Place not found for "$locationName"');
+		  return null;
+		}
+
+		// Step 2: Get Place Photos
+		final photoReference = await _getGooglePlacePhoto(placeId, googlePlacesApiKey);
+		if (photoReference == null) {
+		  print('🔍 GOOGLE PLACES: No photos found for "$locationName"');
+		  return null;
+		}
+
+		// Step 3: Generate Photo URL
+		final photoUrl = _buildGooglePlacePhotoUrl(photoReference, googlePlacesApiKey);
+		print('🖼️ GOOGLE PLACES: Generated photo URL for "$locationName"');
+		return photoUrl;
+
+	  } catch (e) {
+		print('❌ GOOGLE PLACES: Error getting image: $e');
+		return null;
+	  }
+	}
+
+	/// NEW METHOD: Find Google Place using Nearby Search
+	Future<String?> _findGooglePlace(String locationName, double lat, double lng, String apiKey) async {
+	  try {
+		// Clean location name for search
+		String searchName = locationName.toLowerCase();
+		
+		// Remove common prefixes/suffixes that might confuse search
+		final cleanPatterns = [
+		  RegExp(r'^(restaurant|cafe|bar|shop|store|museum|gallery)\s+', caseSensitive: false),
+		  RegExp(r'\s+(vienna|wien|austria|österreich).*$', caseSensitive: false),
+		  RegExp(r'\s+\(\d+.*?\)$'), // Remove distance info like (1.2km)
+		];
+		
+		for (final pattern in cleanPatterns) {
+		  searchName = searchName.replaceAll(pattern, '').trim();
+		}
+
+		print('🔍 GOOGLE PLACES: Searching for "$searchName" near $lat,$lng');
+
+		// Google Places Nearby Search API
+		final url = 'https://maps.googleapis.com/maps/api/place/nearbysearch/json'
+			'?location=$lat,$lng'
+			'&radius=200' // Small radius since we have exact coordinates
+			'&keyword=${Uri.encodeComponent(searchName)}'
+			'&key=$apiKey';
+
+		final response = await http.get(Uri.parse(url)).timeout(Duration(seconds: 10));
+
+		if (response.statusCode == 200) {
+		  final data = jsonDecode(response.body);
+		  
+		  if (data['status'] == 'OK' && data['results'] != null) {
+			final results = data['results'] as List;
+			
+			if (results.isNotEmpty) {
+			  // Find best matching result
+			  for (final result in results.take(3)) { // Check first 3 results
+				final placeName = result['name']?.toString().toLowerCase() ?? '';
+				final placeId = result['place_id']?.toString();
+				
+				if (placeId != null && _isNameMatch(searchName, placeName)) {
+				  print('🔍 GOOGLE PLACES: Found matching place "$placeName" with ID: $placeId');
+				  return placeId;
+				}
+			  }
+			  
+			  // If no exact match, use first result
+			  final firstResult = results[0];
+			  final placeId = firstResult['place_id']?.toString();
+			  final placeName = firstResult['name']?.toString() ?? 'Unknown';
+			  
+			  if (placeId != null) {
+				print('🔍 GOOGLE PLACES: Using first result "$placeName" with ID: $placeId');
+				return placeId;
+			  }
+			}
+		  } else {
+			print('🔍 GOOGLE PLACES: API status: ${data['status']}');
+		  }
+		} else {
+		  print('❌ GOOGLE PLACES: HTTP ${response.statusCode}');
+		}
+
+		return null;
+	  } catch (e) {
+		print('❌ GOOGLE PLACES: Error finding place: $e');
+		return null;
+	  }
+	}
+
+	/// NEW METHOD: Check if place names match
+	bool _isNameMatch(String searchName, String placeName) {
+	  // Remove common words and normalize
+	  final normalizeString = (String str) => str
+		  .toLowerCase()
+		  .replaceAll(RegExp(r'[^\w\s]'), '') // Remove punctuation
+		  .replaceAll(RegExp(r'\s+'), ' ') // Normalize spaces
+		  .trim();
+
+	  final normalizedSearch = normalizeString(searchName);
+	  final normalizedPlace = normalizeString(placeName);
+
+	  // Check for exact match
+	  if (normalizedSearch == normalizedPlace) return true;
+
+	  // Check if one contains the other (for partial matches)
+	  if (normalizedPlace.contains(normalizedSearch) || normalizedSearch.contains(normalizedPlace)) {
+		return true;
+	  }
+
+	  // Check for word overlap (at least 60% of words match)
+	  final searchWords = normalizedSearch.split(' ').where((w) => w.length > 2).toSet();
+	  final placeWords = normalizedPlace.split(' ').where((w) => w.length > 2).toSet();
+	  
+	  if (searchWords.isNotEmpty && placeWords.isNotEmpty) {
+		final overlap = searchWords.intersection(placeWords).length;
+		final similarity = overlap / math.max(searchWords.length, placeWords.length);
+		return similarity >= 0.6;
+	  }
+
+	  return false;
+	}
+
+	/// NEW METHOD: Get photo reference from Google Place
+	Future<String?> _getGooglePlacePhoto(String placeId, String apiKey) async {
+	  try {
+		// Google Places Details API to get photos
+		final url = 'https://maps.googleapis.com/maps/api/place/details/json'
+			'?place_id=$placeId'
+			'&fields=photos'
+			'&key=$apiKey';
+
+		final response = await http.get(Uri.parse(url)).timeout(Duration(seconds: 8));
+
+		if (response.statusCode == 200) {
+		  final data = jsonDecode(response.body);
+		  
+		  if (data['status'] == 'OK' && data['result'] != null) {
+			final result = data['result'];
+			final photos = result['photos'] as List?;
+			
+			if (photos != null && photos.isNotEmpty) {
+			  final photoReference = photos[0]['photo_reference']?.toString();
+			  if (photoReference != null) {
+				print('🖼️ GOOGLE PLACES: Found photo reference');
+				return photoReference;
+			  }
+			}
+		  }
+		}
+
+		return null;
+	  } catch (e) {
+		print('❌ GOOGLE PLACES: Error getting photo reference: $e');
+		return null;
+	  }
+	}
+
+	/// NEW METHOD: Build Google Place Photo URL
+	String _buildGooglePlacePhotoUrl(String photoReference, String apiKey) {
+	  // Google Places Photo API with optimized parameters
+	  return 'https://maps.googleapis.com/maps/api/place/photo'
+		  '?maxwidth=400' // Good balance between quality and cost
+		  '&maxheight=300'
+		  '&photo_reference=$photoReference'
+		  '&key=$apiKey';
+	}
+	
+	/// NEW METHOD: Get image from Wikipedia API
+	Future<String?> _getImageFromWikipediaAPI(String wikipediaRef) async {
+	  try {
+		// Parse Wikipedia reference format: "en:Article Name" or "de:Article Name" or just "Article Name"
+		String language = 'en'; // Default to English
+		String articleTitle = wikipediaRef;
+		
+		if (wikipediaRef.contains(':')) {
+		  final parts = wikipediaRef.split(':');
+		  if (parts.length >= 2) {
+			language = parts[0];
+			articleTitle = parts.sublist(1).join(':');
+		  }
+		}
+		
+		print('📚 WIKIPEDIA API: Searching for "$articleTitle" in $language');
+		
+		// Step 1: Get page info and main image
+		final pageImageUrl = await _getWikipediaPageImage(language, articleTitle);
+		if (pageImageUrl != null) {
+		  return pageImageUrl;
+		}
+		
+		// Step 2: If no main image, try to get first image from page content
+		final contentImageUrl = await _getWikipediaContentImage(language, articleTitle);
+		if (contentImageUrl != null) {
+		  return contentImageUrl;
+		}
+		
+		print('📚 WIKIPEDIA API: No images found for "$articleTitle"');
+		return null;
+		
+	  } catch (e) {
+		print('❌ WIKIPEDIA API: Error getting image: $e');
+		return null;
+	  }
+	}
+
+	/// NEW METHOD: Get main image from Wikipedia page
+	Future<String?> _getWikipediaPageImage(String language, String articleTitle) async {
+	  try {
+		// Wikipedia API endpoint for page info with main image
+		final encodedTitle = Uri.encodeComponent(articleTitle);
+		final url = 'https://$language.wikipedia.org/api/rest_v1/page/summary/$encodedTitle';
+		
+		print('📚 WIKIPEDIA: Getting page summary for $url');
+		
+		final response = await http.get(
+		  Uri.parse(url),
+		  headers: {
+			'User-Agent': 'LocadoApp/1.0 (contact@locado.app)',
+			'Accept': 'application/json',
+		  },
+		).timeout(Duration(seconds: 8));
+		
+		if (response.statusCode == 200) {
+		  final data = jsonDecode(response.body);
+		  
+		  // Try to get thumbnail or originalimage
+		  String? imageUrl;
+		  
+		  if (data['thumbnail'] != null && data['thumbnail']['source'] != null) {
+			imageUrl = data['thumbnail']['source'].toString();
+			print('📚 WIKIPEDIA: Found thumbnail image');
+		  } else if (data['originalimage'] != null && data['originalimage']['source'] != null) {
+			imageUrl = data['originalimage']['source'].toString();
+			print('📚 WIKIPEDIA: Found original image');
+		  }
+		  
+		  if (imageUrl != null && _isValidImageUrl(imageUrl)) {
+			// Convert thumbnail to higher resolution if possible
+			final highResImageUrl = _enhanceWikipediaImageResolution(imageUrl);
+			print('📚 WIKIPEDIA: Enhanced image resolution: $highResImageUrl');
+			return highResImageUrl;
+		  }
+		} else if (response.statusCode == 404) {
+		  print('📚 WIKIPEDIA: Article "$articleTitle" not found in $language');
+		} else {
+		  print('📚 WIKIPEDIA: API returned status ${response.statusCode}');
+		}
+		
+		return null;
+	  } catch (e) {
+		print('❌ WIKIPEDIA: Error getting page image: $e');
+		return null;
+	  }
+	}
+
+	/// NEW METHOD: Get first image from Wikipedia page content
+	Future<String?> _getWikipediaContentImage(String language, String articleTitle) async {
+	  try {
+		// Wikipedia API endpoint for page content
+		final encodedTitle = Uri.encodeComponent(articleTitle);
+		final url = 'https://$language.wikipedia.org/w/api.php'
+			'?action=query'
+			'&format=json'
+			'&titles=$encodedTitle'
+			'&prop=images'
+			'&imlimit=5'; // Get first 5 images
+		
+		print('📚 WIKIPEDIA: Getting page images for $url');
+		
+		final response = await http.get(
+		  Uri.parse(url),
+		  headers: {
+			'User-Agent': 'LocadoApp/1.0 (contact@locado.app)',
+			'Accept': 'application/json',
+		  },
+		).timeout(Duration(seconds: 8));
+		
+		if (response.statusCode == 200) {
+		  final data = jsonDecode(response.body);
+		  final pages = data['query']?['pages'] as Map<String, dynamic>?;
+		  
+		  if (pages != null) {
+			for (final pageData in pages.values) {
+			  final images = pageData['images'] as List<dynamic>?;
+			  if (images != null && images.isNotEmpty) {
+				
+				// Filter out common non-content images
+				for (final image in images) {
+				  final imageTitle = image['title']?.toString() ?? '';
+				  
+				  // Skip common Wikipedia UI images
+				  if (_isContentImage(imageTitle)) {
+					final imageUrl = await _getWikipediaImageUrl(language, imageTitle);
+					if (imageUrl != null) {
+					  print('📚 WIKIPEDIA: Found content image: $imageUrl');
+					  return imageUrl;
+					}
+				  }
+				}
+			  }
+			}
+		  }
+		}
+		
+		return null;
+	  } catch (e) {
+		print('❌ WIKIPEDIA: Error getting content images: $e');
+		return null;
+	  }
+	}
+
+	/// NEW METHOD: Get actual URL for Wikipedia image file
+	Future<String?> _getWikipediaImageUrl(String language, String imageTitle) async {
+	  try {
+		// Remove "File:" prefix if present
+		String filename = imageTitle;
+		if (filename.startsWith('File:')) {
+		  filename = filename.substring(5);
+		}
+		
+		// Wikipedia API to get image URL
+		final encodedFilename = Uri.encodeComponent('File:$filename');
+		final url = 'https://$language.wikipedia.org/w/api.php'
+			'?action=query'
+			'&format=json'
+			'&titles=$encodedFilename'
+			'&prop=imageinfo'
+			'&iiprop=url'
+			'&iiurlwidth=400'; // Request 400px width
+		
+		final response = await http.get(
+		  Uri.parse(url),
+		  headers: {
+			'User-Agent': 'LocadoApp/1.0 (contact@locado.app)',
+		  },
+		).timeout(Duration(seconds: 6));
+		
+		if (response.statusCode == 200) {
+		  final data = jsonDecode(response.body);
+		  final pages = data['query']?['pages'] as Map<String, dynamic>?;
+		  
+		  if (pages != null) {
+			for (final pageData in pages.values) {
+			  final imageInfo = pageData['imageinfo'] as List<dynamic>?;
+			  if (imageInfo != null && imageInfo.isNotEmpty) {
+				final imageUrl = imageInfo[0]['thumburl'] ?? imageInfo[0]['url'];
+				if (imageUrl != null && _isValidImageUrl(imageUrl.toString())) {
+				  return imageUrl.toString();
+				}
+			  }
+			}
+		  }
+		}
+		
+		return null;
+	  } catch (e) {
+		print('❌ WIKIPEDIA: Error getting image URL: $e');
+		return null;
+	  }
+	}
+
+	/// NEW METHOD: Check if image is content image (not UI/navigation image)
+	bool _isContentImage(String imageTitle) {
+	  final lowerTitle = imageTitle.toLowerCase();
+	  
+	  // Skip common Wikipedia UI and navigation images
+	  final skipImages = [
+		'commons-logo',
+		'wikimedia',
+		'edit-icon',
+		'ambox',
+		'question_book',
+		'crystal_clear',
+		'nuvola',
+		'folder_home',
+		'searchtool',
+		'wiki.png',
+		'symbol_support',
+		'symbol_oppose',
+		'crystal_128',
+		'emblem-important',
+		'dialog-information',
+		'gtk-dialog-info',
+	  ];
+	  
+	  // Skip images that are clearly UI elements
+	  if (skipImages.any((skip) => lowerTitle.contains(skip))) {
+		return false;
+	  }
+	  
+	  // Skip very small images (usually icons)
+	  if (lowerTitle.contains('icon') && lowerTitle.contains('16') || 
+		  lowerTitle.contains('icon') && lowerTitle.contains('24')) {
+		return false;
+	  }
+	  
+	  // Prefer actual photographs and illustrations
+	  final goodImages = ['.jpg', '.jpeg', '.png', '.gif', '.webp'];
+	  return goodImages.any((ext) => lowerTitle.contains(ext));
+	}
+
+	/// NEW METHOD: Enhance Wikipedia image resolution
+	String _enhanceWikipediaImageResolution(String imageUrl) {
+	  try {
+		// Wikipedia thumbnail URLs can be enhanced by changing the resolution
+		// Example: /thumb/a/ab/Example.jpg/200px-Example.jpg -> /thumb/a/ab/Example.jpg/400px-Example.jpg
+		
+		final RegExp thumbnailRegex = RegExp(r'/(\d+)px-([^/]+)$');
+		final match = thumbnailRegex.firstMatch(imageUrl);
+		
+		if (match != null) {
+		  final currentWidth = int.tryParse(match.group(1) ?? '');
+		  final filename = match.group(2);
+		  
+		  if (currentWidth != null && currentWidth < 400 && filename != null) {
+			// Enhance to 400px width for better quality
+			final enhancedUrl = imageUrl.replaceFirst(
+			  '/${currentWidth}px-$filename',
+			  '/400px-$filename'
+			);
+			print('📚 WIKIPEDIA: Enhanced resolution from ${currentWidth}px to 400px');
+			return enhancedUrl;
+		  }
+		}
+		
+		return imageUrl;
+	  } catch (e) {
+		print('❌ WIKIPEDIA: Error enhancing resolution: $e');
+		return imageUrl;
+	  }
+	}
+
+	/// NEW METHOD: Validate if URL is a valid image URL
+	bool _isValidImageUrl(String url) {
+	  try {
+		final uri = Uri.parse(url);
+		
+		// Check if URL is valid
+		if (!uri.hasScheme || (!uri.scheme.startsWith('http'))) {
+		  return false;
+		}
+
+		// Check if URL ends with image extension
+		final imageExtensions = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.svg'];
+		final lowerUrl = url.toLowerCase();
+		
+		return imageExtensions.any((ext) => lowerUrl.contains(ext));
+	  } catch (e) {
+		return false;
+	  }
+	}
+
+	/// NEW METHOD: Convert Wikimedia Commons reference to image URL
+	String? _convertWikimediaToImageUrl(String wikimediaRef) {
+	  try {
+		// Wikimedia Commons format: "File:Example.jpg" or "Category:Example" or just "Example.jpg"
+		String filename = wikimediaRef;
+		
+		// Remove "File:" prefix if present
+		if (filename.startsWith('File:')) {
+		  filename = filename.substring(5);
+		}
+		
+		// Skip categories
+		if (filename.startsWith('Category:')) {
+		  return null;
+		}
+		
+		// Check if it's an image file
+		if (!_isValidImageUrl(filename)) {
+		  return null;
+		}
+		
+		// Convert to Wikimedia Commons URL
+		// Format: https://commons.wikimedia.org/wiki/Special:FilePath/FILENAME
+		final encodedFilename = Uri.encodeComponent(filename);
+		final wikimediaUrl = 'https://commons.wikimedia.org/wiki/Special:FilePath/$encodedFilename';
+		
+		print('🖼️ WIKIMEDIA: Converted "$wikimediaRef" to "$wikimediaUrl"');
+		return wikimediaUrl;
+	  } catch (e) {
+		print('❌ WIKIMEDIA: Error converting reference: $e');
+		return null;
 	  }
 	}
 
@@ -1479,6 +2037,7 @@ Return only a JSON array, no other text.''';
 					  distanceFromUser: _currentLatLng != null 
 						  ? Geolocator.distanceBetween(_currentLatLng!.latitude, _currentLatLng!.longitude, lat, lng)
 						  : null,
+					  imageUrl: null,
 					));
 					
 					print('🗺️ DIRECT OSM: Found ${cleanName} in $locationName (${(distance/1000).toStringAsFixed(1)}km)');
@@ -1997,7 +2556,7 @@ Format your response as a valid JSON array only, no additional text.''';
      '#8BC34A', '#4CAF50', '#009688', '#00BCD4', '#03A9F4',
      '#2196F3', '#3F51B5', '#673AB7', '#9C27B0', '#E91E63'
    ];
-   return colors[Random().nextInt(colors.length)];
+   return colors[math.Random().nextInt(colors.length)];
  }
 
  void _showSnackBar(String message, Color color) {
@@ -2241,6 +2800,7 @@ Future<SearchIntent> _detectSearchIntent(String originalQuery) async {
 					
 					final cleanName = _cleanDisplayName(name);
 					final taskItems = await _generateTaskItemsFromType(cleanName, type);
+					
 
 					results.add(AILocationResult(
 					  name: cleanName,
@@ -2249,6 +2809,7 @@ Future<SearchIntent> _detectSearchIntent(String originalQuery) async {
 					  taskItems: taskItems,
 					  category: type,
 					  distanceFromUser: distance,
+					  imageUrl: null,
 					));
 					
 					print('⚡ NOMINATIM QUICK: Added $cleanName (${(distance/1000).toStringAsFixed(1)}km)');
@@ -2860,6 +3421,8 @@ Respond with ONLY this JSON format:
 	}
 
 	/// Search using Overpass API directly with OSM tags and AI-translated local terms
+	/// UPDATED METHOD: Search Overpass with image extraction
+    /// UPDATED METHOD: Update calls to include location data
 	Future<List<AILocationResult>> _searchOverpassDirect(
 		String category, 
 		List<String> localTerms,
@@ -2872,7 +3435,7 @@ Respond with ONLY this JSON format:
 	  try {
 		print('🚀 OPTIMIZED SEARCH: Starting for "$category"');
 		
-		// NOVO: Dobij optimalni redoslijed servera
+		// Get optimal server order
 		final servers = await _getOptimalServerOrder();
 		
 		if (servers.isEmpty) {
@@ -2881,15 +3444,14 @@ Respond with ONLY this JSON format:
 		}
 		
 		print('🏷️ OSM TAGS: $osmTags');
-		print('🌐 LOCAL TERMS: $localTerms');
+		print('🌍 LOCAL TERMS: $localTerms');
 		
-		// Ostatak koda ostaje isti, samo koristi 'servers' umjesto hardcoded liste
 		final queryParts = <String>[];
 		
+		// Add OSM tag searches
 		for (final tagType in osmTags.keys) {
 		  for (final tagValue in osmTags[tagType]!) {
 			if (tagValue == '*') {
-			  // Special case for all values
 			  queryParts.add('node["$tagType"](around:1500,${_currentLatLng!.latitude},${_currentLatLng!.longitude});');
 			  queryParts.add('way["$tagType"](around:1500,${_currentLatLng!.latitude},${_currentLatLng!.longitude});');
 			} else {
@@ -2899,41 +3461,38 @@ Respond with ONLY this JSON format:
 		  }
 		}
 
-		// ADD NAME SEARCHES WITH LOCAL TERMS
+		// Add name searches with local terms
 		for (final localTerm in localTerms) {
-		  // Parse comma-separated terms if AI returned them as one string
 		  final terms = localTerm.contains(',') 
 			  ? localTerm.split(',').map((t) => t.trim()).toList()
 			  : [localTerm];
 			  
-			for (final term in terms) {
-			  // Clean the term from any quotes
-			  final cleanTerm = term.replaceAll('"', '').replaceAll("'", '').trim();
+		  for (final term in terms) {
+			final cleanTerm = term.replaceAll('"', '').replaceAll("'", '').trim();
+			
+			if (cleanTerm.isNotEmpty && cleanTerm.length > 2) {
+			  queryParts.add('node["name"~"$cleanTerm",i](around:1500,${_currentLatLng!.latitude},${_currentLatLng!.longitude});');
+			  queryParts.add('way["name"~"$cleanTerm",i](around:1500,${_currentLatLng!.latitude},${_currentLatLng!.longitude});');
 			  
-			  if (cleanTerm.isNotEmpty && cleanTerm.length > 2) {
-				// Search by name containing local term (case insensitive)
-				queryParts.add('node["name"~"$cleanTerm",i](around:1500,${_currentLatLng!.latitude},${_currentLatLng!.longitude});');
-				queryParts.add('way["name"~"$cleanTerm",i](around:1500,${_currentLatLng!.latitude},${_currentLatLng!.longitude});');
-				
-				print('🌐 NAME SEARCH: Adding name search for "$cleanTerm"');
-			  }
+			  print('🌍 NAME SEARCH: Adding name search for "$cleanTerm"');
 			}
+		  }
 		}
 		
 		final overpassQuery = '''
-	[out:json][timeout:10];
-	(
-	  ${queryParts.join('\n  ')}
-	);
-	out center meta;
-	''';
+[out:json][timeout:10];
+(
+  ${queryParts.join('\n  ')}
+);
+out center meta;
+''';
 
 		print('🔍 OVERPASS: Query = $overpassQuery');
 
 		http.Response? response;
 		String? usedServer;
 
-		// Koristi optimizovani redoslijed servera
+		// Try servers in optimal order
 		for (int i = 0; i < servers.length; i++) {
 		  final serverUrl = servers[i];
 		  print('🌐 TRYING OPTIMAL SERVER ${i + 1}/${servers.length}: $serverUrl');
@@ -2946,7 +3505,7 @@ Respond with ONLY this JSON format:
 				'User-Agent': 'LocadoApp/1.0',
 			  },
 			  body: 'data=${Uri.encodeComponent(overpassQuery)}',
-			).timeout(Duration(seconds: 8)); // Skraćen timeout jer znamo da server radi
+			).timeout(Duration(seconds: 8));
 			
 			if (response.statusCode == 200) {
 			  usedServer = serverUrl;
@@ -2964,51 +3523,16 @@ Respond with ONLY this JSON format:
 		}
 
 		if (response == null) {
-		  print('❌ ALL OPTIMAL SERVERS FAILED');
-		  print('🔄 FALLBACK: Trying original server order...');
-		  
-		  // FALLBACK: pokušaj sa svim originalnim serverima
-		  for (int i = 0; i < _allServers.length; i++) {
-			final serverUrl = _allServers[i];
-			print('🌐 FALLBACK SERVER ${i + 1}/${_allServers.length}: $serverUrl');
-			
-			try {
-			  response = await http.post(
-				Uri.parse(serverUrl),
-				headers: {
-				  'Content-Type': 'application/x-www-form-urlencoded',
-				  'User-Agent': 'LocadoApp/1.0',
-				},
-				body: 'data=${Uri.encodeComponent(overpassQuery)}',
-			  ).timeout(Duration(seconds: 15)); // Duži timeout za fallback
-			  
-			  if (response.statusCode == 200) {
-				print('✅ FALLBACK SUCCESS with: $serverUrl');
-				break;
-			  } else {
-				response = null;
-			  }
-			} catch (e) {
-			  print('❌ Fallback server $serverUrl failed: $e');
-			  response = null;
-			  continue;
-			}
-		  }
-		  
-		  if (response == null) {
-			print('❌ ALL SERVERS FAILED (including fallback)');
-			return results;
-		  }
+		  print('❌ ALL SERVERS FAILED');
+		  return results;
 		}
 
-		// Ostatak processing koda ostaje isti...
 		if (response.statusCode == 200) {
 		  final data = jsonDecode(response.body);
 		  final elements = data['elements'] as List;
 
 		  print('🔍 OVERPASS: Found ${elements.length} raw results');
 
-		  // Use Set to avoid duplicates by coordinates
 		  final Set<String> addedCoordinates = {};
 
 		  for (final element in elements.take(50)) {
@@ -3029,13 +3553,11 @@ Respond with ONLY this JSON format:
 			  continue;
 			}
 
-			// Create unique coordinate key to avoid duplicates
 			final coordKey = '${lat.toStringAsFixed(6)}_${lng.toStringAsFixed(6)}';
 			if (addedCoordinates.contains(coordKey)) {
 			  continue;
 			}
 
-			// Calculate distance
 			final distance = Geolocator.distanceBetween(
 			  _currentLatLng!.latitude,
 			  _currentLatLng!.longitude,
@@ -3043,12 +3565,14 @@ Respond with ONLY this JSON format:
 			  lng,
 			);
 
-			// Only include nearby places (1.5km max)
 			if (distance <= 1500) {
 			  addedCoordinates.add(coordKey);
 			  
 			  // Generate task items from real OSM tags
 			  final taskItems = await _generateTaskItemsFromOSMTags(name, tags, category);
+			  
+			  // Extract image URL from OSM tags with Google Places fallback
+			  final imageUrl = await _extractImageFromOSMTags(tags, name, lat, lng);
 
 			  results.add(AILocationResult(
 				name: name,
@@ -3057,16 +3581,18 @@ Respond with ONLY this JSON format:
 				taskItems: taskItems,
 				category: _getCategoryFromOSMTags(tags),
 				distanceFromUser: distance,
+				imageUrl: imageUrl, // Now includes Google Places images
 			  ));
 			  
-			  print('✅ OVERPASS: Added $name (${(distance / 1000).toStringAsFixed(2)}km)');
+			  if (imageUrl != null) {
+				print('✅ OVERPASS: Added $name with image (${(distance / 1000).toStringAsFixed(2)}km)');
+			  } else {
+				print('✅ OVERPASS: Added $name (${(distance / 1000).toStringAsFixed(2)}km)');
+			  }
 			}
 		  }
-		} else {
-		  print('❌ OVERPASS: API returned status code ${response.statusCode}');
 		}
 
-		// Sort by distance
 		results.sort((a, b) => a.distanceFromUser!.compareTo(b.distanceFromUser!));
 
 		print('✅ OVERPASS: Final results: ${results.length}');
@@ -3076,8 +3602,6 @@ Respond with ONLY this JSON format:
 		print('❌ OVERPASS: Error = $e');
 		return results;
 	  }
-	  
-	  return results;
 	}
 	
 	/// NEW METHOD: Enhanced rural search with Nominatim primary and Overpass fallback
@@ -3282,6 +3806,7 @@ out center meta;
 				addedCoordinates.add(coordKey);
 				
 				// Generate task items from real OSM tags
+				final imageUrl = await _extractImageFromOSMTags(tags, name, lat, lng);
 				final taskItems = await _generateTaskItemsFromOSMTags(name, tags, category);
 
 				currentRadiusResults.add(AILocationResult(
@@ -3291,6 +3816,7 @@ out center meta;
 				  taskItems: taskItems,
 				  category: _getCategoryFromOSMTags(tags),
 				  distanceFromUser: distance,
+				  imageUrl: null,
 				));
 				
 				print('✅ OVERPASS FALLBACK: Added $name (${(distance/1000).toStringAsFixed(1)}km)');
@@ -3432,6 +3958,7 @@ out center meta;
 					  taskItems: taskItems,
 					  category: type,
 					  distanceFromUser: distance,
+					  imageUrl: null,
 					));
 					
 					print('✅ NOMINATIM RURAL: Added $cleanName (${(distance/1000).toStringAsFixed(1)}km)');
@@ -3480,6 +4007,7 @@ out center meta;
 
 
 	/// Generate task items from OSM tags
+    /// UPDATED METHOD: Generate task items with Wikipedia info
 	Future<List<String>> _generateTaskItemsFromOSMTags(
 		String name, 
 		Map<String, dynamic> tags,
@@ -3493,6 +4021,8 @@ out center meta;
 	  final website = tags['website'] ?? '';
 	  final wheelchairAccess = tags['wheelchair'] ?? '';
 	  final brand = tags['brand'] ?? '';
+	  final email = tags['email'] ?? '';
+	  final wikipedia = tags['wikipedia'] ?? '';
 	  
 	  // Category-specific tasks
 	  final categoryLower = category.toLowerCase();
@@ -3506,7 +4036,7 @@ out center meta;
 		  tasks.add('Check opening hours before visiting');
 		}
 		tasks.add('Bring prescription and ID');
-	  } else if (categoryLower.contains('restaurant')) {
+	  } else if (categoryLower.contains('restaurant') || categoryLower.contains('cafe')) {
 		final cuisine = tags['cuisine'] ?? '';
 		if (cuisine.isNotEmpty) {
 		  tasks.add('Try their $cuisine specialties');
@@ -3532,6 +4062,15 @@ out center meta;
 		tasks.add('Call: $phone');
 	  }
 	  
+	  if (email.isNotEmpty) {
+		tasks.add('Email: $email');
+	  }
+	  
+	  // Wikipedia info
+	  if (wikipedia.isNotEmpty) {
+		tasks.add('📚 Read more on Wikipedia');
+	  }
+	  
 	  // Accessibility
 	  if (wheelchairAccess == 'yes') {
 		tasks.add('♿ Wheelchair accessible');
@@ -3540,6 +4079,11 @@ out center meta;
 	  // Brand info
 	  if (brand.isNotEmpty && brand != name) {
 		tasks.add('Brand: $brand');
+	  }
+	  
+	  // Website info
+	  if (website.isNotEmpty) {
+		tasks.add('More info: ${_shortenUrl(website)}');
 	  }
 	  
 	  return tasks.take(5).toList();
@@ -4316,183 +4860,449 @@ Widget _buildResultsSection() {
    );
  }
 
- Widget _buildResultCard(AILocationResult result, int index) {
-   return Container(
-     decoration: BoxDecoration(
-       color: Colors.white,
-       borderRadius: BorderRadius.circular(12),
-       boxShadow: [
-         BoxShadow(
-           color: Colors.grey.shade200,
-           blurRadius: 4,
-           offset: const Offset(0, 2),
-         ),
-       ],
-       border: result.isSelected
-           ? Border.all(color: Colors.green, width: 2)
-           : Border.all(color: Colors.grey.shade200),
-     ),
-     child: Material(
-       color: Colors.transparent,
-       child: InkWell(
-         borderRadius: BorderRadius.circular(12),
-         onTap: () {
-           setState(() {
-             result.isSelected = !result.isSelected;
-           });
-         },
-         child: Padding(
-           padding: const EdgeInsets.all(12),
-           child: Column(
-             crossAxisAlignment: CrossAxisAlignment.start,
-             children: [
-               // Header with checkbox
-               Row(
-                 children: [
-                   Container(
-                     width: 20,
-                     height: 20,
-                     decoration: BoxDecoration(
-                       color: result.isSelected ? Colors.green : Colors.transparent,
-                       border: Border.all(
-                         color: result.isSelected ? Colors.green : Colors.grey.shade400,
-                         width: 2,
-                       ),
-                       borderRadius: BorderRadius.circular(4),
-                     ),
-                     child: result.isSelected
-                         ? const Icon(Icons.check, color: Colors.white, size: 14)
-                         : null,
-                   ),
-                   const SizedBox(width: 10),
-                   Expanded(
-                     child: Column(
-                       crossAxisAlignment: CrossAxisAlignment.start,
-                       children: [
-                         Row(
-                           children: [
-                             Expanded(
-                               child: Text(
-                                 result.name,
-                                 style: const TextStyle(
-                                   fontSize: 16,
-                                   fontWeight: FontWeight.bold,
-                                   color: Colors.black87,
-                                 ),
-                               ),
-                             ),
-                             if (result.distanceFromUser != null) ...[
-                               const SizedBox(width: 8),
-                               Container(
-                                 padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                                 decoration: BoxDecoration(
-                                   color: Colors.blue.shade50,
-                                   borderRadius: BorderRadius.circular(8),
-                                   border: Border.all(color: Colors.blue.shade200),
-                                 ),
-                                 child: Text(
-                                   _formatDistance(result.distanceFromUser),
-                                   style: TextStyle(
-                                     fontSize: 10,
-                                     fontWeight: FontWeight.bold,
-                                     color: Colors.blue.shade700,
-                                   ),
-                                 ),
-                               ),
-                             ],
-                           ],
-                         ),
-                         const SizedBox(height: 2),
-                         Text(
-                           result.description,
-                           style: TextStyle(
-                             fontSize: 12,
-                             color: Colors.grey.shade600,
-                           ),
-                           maxLines: 2,
-                           overflow: TextOverflow.ellipsis,
-                         ),
-                       ],
-                     ),
-                   ),
-                   Container(
-                     padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                     decoration: BoxDecoration(
-                       color: Colors.teal.shade50,
-                       borderRadius: BorderRadius.circular(8),
-                     ),
-                     child: Text(
-                       result.category.replaceAll('_', ' ').toUpperCase(),
-                       style: TextStyle(
-                         fontSize: 8,
-                         fontWeight: FontWeight.bold,
-                         color: Colors.teal.shade700,
-                       ),
-                     ),
-                   ),
-                 ],
-               ),
+/// UPDATED METHOD: Result card with image display
+	Widget _buildResultCard(AILocationResult result, int index) {
+	  return Container(
+		decoration: BoxDecoration(
+		  color: Colors.white,
+		  borderRadius: BorderRadius.circular(12),
+		  boxShadow: [
+			BoxShadow(
+			  color: Colors.grey.shade200,
+			  blurRadius: 4,
+			  offset: const Offset(0, 2),
+			),
+		  ],
+		  border: result.isSelected
+			  ? Border.all(color: Colors.green, width: 2)
+			  : Border.all(color: Colors.grey.shade200),
+		),
+		child: Material(
+		  color: Colors.transparent,
+		  child: InkWell(
+			borderRadius: BorderRadius.circular(12),
+			onTap: () {
+			  setState(() {
+				result.isSelected = !result.isSelected;
+			  });
+			},
+			child: Column(
+			  crossAxisAlignment: CrossAxisAlignment.start,
+			  children: [
+				// Image section (NEW)
+				if (result.imageUrl != null) _buildLocationImage(result),
+				
+				// Content section
+				Padding(
+				  padding: EdgeInsets.all(result.imageUrl != null ? 12 : 16),
+				  child: Column(
+					crossAxisAlignment: CrossAxisAlignment.start,
+					children: [
+					  // Header with checkbox
+					  Row(
+						children: [
+						  Container(
+							width: 20,
+							height: 20,
+							decoration: BoxDecoration(
+							  color: result.isSelected ? Colors.green : Colors.transparent,
+							  border: Border.all(
+								color: result.isSelected ? Colors.green : Colors.grey.shade400,
+								width: 2,
+							  ),
+							  borderRadius: BorderRadius.circular(4),
+							),
+							child: result.isSelected
+								? const Icon(Icons.check, color: Colors.white, size: 14)
+								: null,
+						  ),
+						  const SizedBox(width: 10),
+						  Expanded(
+							child: Column(
+							  crossAxisAlignment: CrossAxisAlignment.start,
+							  children: [
+								Row(
+								  children: [
+									Expanded(
+									  child: Text(
+										result.name,
+										style: const TextStyle(
+										  fontSize: 16,
+										  fontWeight: FontWeight.bold,
+										  color: Colors.black87,
+										),
+									  ),
+									),
+									if (result.distanceFromUser != null) ...[
+									  const SizedBox(width: 8),
+									  Container(
+										padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+										decoration: BoxDecoration(
+										  color: Colors.blue.shade50,
+										  borderRadius: BorderRadius.circular(8),
+										  border: Border.all(color: Colors.blue.shade200),
+										),
+										child: Text(
+										  _formatDistance(result.distanceFromUser),
+										  style: TextStyle(
+											fontSize: 10,
+											fontWeight: FontWeight.bold,
+											color: Colors.blue.shade700,
+										  ),
+										),
+									  ),
+									],
+								  ],
+								),
+								const SizedBox(height: 2),
+								Text(
+								  result.description,
+								  style: TextStyle(
+									fontSize: 12,
+									color: Colors.grey.shade600,
+								  ),
+								  maxLines: 2,
+								  overflow: TextOverflow.ellipsis,
+								),
+							  ],
+							),
+						  ),
+						  // Category and image indicator
+						  Column(
+							children: [
+							  Container(
+								padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+								decoration: BoxDecoration(
+								  color: Colors.teal.shade50,
+								  borderRadius: BorderRadius.circular(8),
+								),
+								child: Text(
+								  result.category.replaceAll('_', ' ').toUpperCase(),
+								  style: TextStyle(
+									fontSize: 8,
+									fontWeight: FontWeight.bold,
+									color: Colors.teal.shade700,
+								  ),
+								),
+							  ),
+							  if (result.imageUrl != null) ...[
+								const SizedBox(height: 4),
+								Container(
+								  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+								  decoration: BoxDecoration(
+									color: Colors.green.shade50,
+									borderRadius: BorderRadius.circular(6),
+								  ),
+								  child: Row(
+									mainAxisSize: MainAxisSize.min,
+									children: [
+									  Icon(
+										Icons.photo_camera,
+										size: 8,
+										color: Colors.green.shade600,
+									  ),
+									  const SizedBox(width: 2),
+									  Text(
+										'PHOTO',
+										style: TextStyle(
+										  fontSize: 6,
+										  fontWeight: FontWeight.bold,
+										  color: Colors.green.shade600,
+										),
+									  ),
+									],
+								  ),
+								),
+							  ],
+							],
+						  ),
+						],
+					  ),
 
-               // Task items
-               if (result.taskItems.isNotEmpty) ...[
-                 const SizedBox(height: 10),
-                 Text(
-                   'Things to do:',
-                   style: TextStyle(
-                     fontSize: 12,
-                     fontWeight: FontWeight.bold,
-                     color: Colors.grey.shade700,
-                   ),
-                 ),
-                 const SizedBox(height: 6),
-                 ...result.taskItems.take(3).map((item) => Padding(
-                   padding: const EdgeInsets.only(bottom: 3),
-                   child: Row(
-                     crossAxisAlignment: CrossAxisAlignment.start,
-                     children: [
-                       Container(
-                         width: 4,
-                         height: 4,
-                         margin: const EdgeInsets.only(top: 6),
-                         decoration: BoxDecoration(
-                           color: Colors.teal.shade400,
-                           shape: BoxShape.circle,
-                         ),
-                       ),
-                       const SizedBox(width: 8),
-                       Expanded(
-                         child: Text(
-                           item,
-                           style: TextStyle(
-                             fontSize: 11,
-                             color: Colors.grey.shade700,
-                             height: 1.2,
-                           ),
-                           maxLines: 1,
-                           overflow: TextOverflow.ellipsis,
-                         ),
-                       ),
-                     ],
-                   ),
-                 )),
-                 if (result.taskItems.length > 3)
-                   Padding(
-                     padding: const EdgeInsets.only(top: 4),
-                     child: Text(
-                       '+${result.taskItems.length - 3} more items',
-                       style: TextStyle(
-                         fontSize: 10,
-                         color: Colors.teal.shade600,
-                         fontStyle: FontStyle.italic,
-                       ),
-                     ),
-                   ),
-               ],
-             ],
-           ),
-         ),
-       ),
-     ),
-   );
- }
+					  // Task items
+					  if (result.taskItems.isNotEmpty) ...[
+						const SizedBox(height: 10),
+						Text(
+						  'Things to do:',
+						  style: TextStyle(
+							fontSize: 12,
+							fontWeight: FontWeight.bold,
+							color: Colors.grey.shade700,
+						  ),
+						),
+						const SizedBox(height: 6),
+						...result.taskItems.take(3).map((item) => Padding(
+						  padding: const EdgeInsets.only(bottom: 3),
+						  child: Row(
+							crossAxisAlignment: CrossAxisAlignment.start,
+							children: [
+							  Container(
+								width: 4,
+								height: 4,
+								margin: const EdgeInsets.only(top: 6),
+								decoration: BoxDecoration(
+								  color: Colors.teal.shade400,
+								  shape: BoxShape.circle,
+								),
+							  ),
+							  const SizedBox(width: 8),
+							  Expanded(
+								child: Text(
+								  item,
+								  style: TextStyle(
+									fontSize: 11,
+									color: Colors.grey.shade700,
+									height: 1.2,
+								  ),
+								  maxLines: 1,
+								  overflow: TextOverflow.ellipsis,
+								),
+							  ),
+							],
+						  ),
+						)),
+						if (result.taskItems.length > 3)
+						  Padding(
+							padding: const EdgeInsets.only(top: 4),
+							child: Text(
+							  '+${result.taskItems.length - 3} more items',
+							  style: TextStyle(
+								fontSize: 10,
+								color: Colors.teal.shade600,
+								fontStyle: FontStyle.italic,
+							  ),
+							),
+						  ),
+					  ],
+					],
+				  ),
+				),
+			  ],
+			),
+		  ),
+		),
+	  );
+	}
+	/// NEW METHOD: Build location image widget
+	Widget _buildLocationImage(AILocationResult result) {
+	  return ClipRRect(
+		borderRadius: const BorderRadius.only(
+		  topLeft: Radius.circular(12),
+		  topRight: Radius.circular(12),
+		),
+		child: Container(
+		  height: 160,
+		  width: double.infinity,
+		  decoration: BoxDecoration(
+			color: Colors.grey.shade200,
+		  ),
+		  child: Stack(
+			children: [
+			  // Main image
+			  Positioned.fill(
+				child: Image.network(
+				  result.imageUrl!,
+				  fit: BoxFit.cover,
+				  loadingBuilder: (context, child, loadingProgress) {
+					if (loadingProgress == null) return child;
+					return _buildImageLoadingPlaceholder();
+				  },
+				  errorBuilder: (context, error, stackTrace) {
+					print('🖼️ IMAGE ERROR: Failed to load ${result.imageUrl}');
+					return _buildImageErrorPlaceholder(result);
+				  },
+				),
+			  ),
+			  
+			  // Gradient overlay for better text readability
+			  Positioned.fill(
+				child: Container(
+				  decoration: BoxDecoration(
+					gradient: LinearGradient(
+					  begin: Alignment.topCenter,
+					  end: Alignment.bottomCenter,
+					  colors: [
+						Colors.transparent,
+						Colors.black.withOpacity(0.3),
+					  ],
+					),
+				  ),
+				),
+			  ),
+			  
+			  // Image source indicator
+			  Positioned(
+				top: 8,
+				right: 8,
+				child: Container(
+				  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+				  decoration: BoxDecoration(
+					color: Colors.black.withOpacity(0.6),
+					borderRadius: BorderRadius.circular(8),
+				  ),
+				  child: Row(
+					mainAxisSize: MainAxisSize.min,
+					children: [
+					  Icon(
+						_getImageSourceIcon(result.imageUrl!),
+						size: 10,
+						color: Colors.white,
+					  ),
+					  const SizedBox(width: 3),
+					  Text(
+						_getImageSourceText(result.imageUrl!),
+						style: const TextStyle(
+						  fontSize: 8,
+						  color: Colors.white,
+						  fontWeight: FontWeight.bold,
+						),
+					  ),
+					],
+				  ),
+				),
+			  ),
+			  
+			  // Selection overlay
+			  if (result.isSelected)
+				Positioned.fill(
+				  child: Container(
+					decoration: BoxDecoration(
+					  color: Colors.green.withOpacity(0.2),
+					  border: Border.all(color: Colors.green, width: 2),
+					),
+					child: const Center(
+					  child: Icon(
+						Icons.check_circle,
+						color: Colors.green,
+						size: 40,
+					  ),
+					),
+				  ),
+				),
+			],
+		  ),
+		),
+	  );
+	}
+
+	/// NEW METHOD: Image loading placeholder
+	Widget _buildImageLoadingPlaceholder() {
+	  return Container(
+		color: Colors.grey.shade200,
+		child: Center(
+		  child: Column(
+			mainAxisAlignment: MainAxisAlignment.center,
+			children: [
+			  SizedBox(
+				width: 24,
+				height: 24,
+				child: CircularProgressIndicator(
+				  strokeWidth: 2,
+				  color: Colors.grey.shade400,
+				),
+			  ),
+			  const SizedBox(height: 8),
+			  Text(
+				'Loading image...',
+				style: TextStyle(
+				  fontSize: 11,
+				  color: Colors.grey.shade500,
+				),
+			  ),
+			],
+		  ),
+		),
+	  );
+	}
+
+	/// NEW METHOD: Image error placeholder
+	Widget _buildImageErrorPlaceholder(AILocationResult result) {
+	  return Container(
+		color: Colors.grey.shade100,
+		child: Center(
+		  child: Column(
+			mainAxisAlignment: MainAxisAlignment.center,
+			children: [
+			  Icon(
+				_getCategoryIcon(result.category),
+				size: 32,
+				color: Colors.grey.shade400,
+			  ),
+			  const SizedBox(height: 8),
+			  Text(
+				result.category.replaceAll('_', ' ').toUpperCase(),
+				style: TextStyle(
+				  fontSize: 10,
+				  fontWeight: FontWeight.bold,
+				  color: Colors.grey.shade500,
+				),
+			  ),
+			  const SizedBox(height: 4),
+			  Text(
+				'Image unavailable',
+				style: TextStyle(
+				  fontSize: 9,
+				  color: Colors.grey.shade400,
+				),
+			  ),
+			],
+		  ),
+		),
+	  );
+	}
+
+	/// NEW METHOD: Get category icon for fallback
+	IconData _getCategoryIcon(String category) {
+	  final categoryLower = category.toLowerCase();
+	  
+	  if (categoryLower.contains('restaurant') || categoryLower.contains('food')) {
+		return Icons.restaurant;
+	  } else if (categoryLower.contains('cafe') || categoryLower.contains('coffee')) {
+		return Icons.local_cafe;
+	  } else if (categoryLower.contains('museum') || categoryLower.contains('gallery')) {
+		return Icons.museum;
+	  } else if (categoryLower.contains('pharmacy')) {
+		return Icons.local_pharmacy;
+	  } else if (categoryLower.contains('hospital') || categoryLower.contains('clinic')) {
+		return Icons.local_hospital;
+	  } else if (categoryLower.contains('bank') || categoryLower.contains('atm')) {
+		return Icons.account_balance;
+	  } else if (categoryLower.contains('fuel') || categoryLower.contains('gas')) {
+		return Icons.local_gas_station;
+	  } else if (categoryLower.contains('shop') || categoryLower.contains('store')) {
+		return Icons.shopping_bag;
+	  } else if (categoryLower.contains('theatre') || categoryLower.contains('cinema')) {
+		return Icons.movie;
+	  } else if (categoryLower.contains('tourism') || categoryLower.contains('attraction')) {
+		return Icons.place;
+	  } else {
+		return Icons.location_on;
+	  }
+	}
+
+	/// NEW METHOD: Get image source icon
+	IconData _getImageSourceIcon(String imageUrl) {
+	  if (imageUrl.contains('googleapis.com')) {
+		return Icons.business;
+	  } else if (imageUrl.contains('wikimedia') || imageUrl.contains('wikipedia')) {
+		return Icons.article;
+	  } else if (imageUrl.contains('commons.wikimedia.org')) {
+		return Icons.public;
+	  } else {
+		return Icons.photo;
+	  }
+	}
+
+	/// NEW METHOD: Get image source text
+	String _getImageSourceText(String imageUrl) {
+	  if (imageUrl.contains('googleapis.com')) {
+		return 'GOOGLE';
+	  } else if (imageUrl.contains('wikimedia') || imageUrl.contains('wikipedia')) {
+		return 'WIKI';
+	  } else if (imageUrl.contains('commons.wikimedia.org')) {
+		return 'COMMONS';
+	  } else {
+		return 'PHOTO';
+	  }
+	}
 }
