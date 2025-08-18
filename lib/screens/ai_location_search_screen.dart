@@ -207,7 +207,7 @@ class _AILocationSearchScreenState extends State<AILocationSearchScreen> {
 		  'text': 'Nightlife & Bars',
 		  'icon': Icons.local_bar,
 		  'color': Colors.purple,
-		  'query': 'nightlife bars nearby',
+		  'query': 'bars nearby',
 		},
 		{
 		  'text': 'Museums & Culture',
@@ -1096,6 +1096,8 @@ class _AILocationSearchScreenState extends State<AILocationSearchScreen> {
 		  return ['bank', 'atm'];
 		case 'hospital':
 		  return ['hospital', 'clinic', 'doctors'];
+		case 'nightlife': 
+			  return ['bar', 'pub', 'nightclub', 'biergarten', 'casino', 'stripclub', 'social_club'];
 		default:
 		  return ['restaurant', 'cafe', 'fast_food']; // Default fallback
 	  }
@@ -1125,6 +1127,14 @@ class _AILocationSearchScreenState extends State<AILocationSearchScreen> {
 	  }
 	  if (lowerQuery.contains('hospital') || lowerQuery.contains('doctor') || lowerQuery.contains('medical')) {
 		return 'hospital';
+	  }
+	  
+	  if (lowerQuery.contains('nightlife') || lowerQuery.contains('bar') || lowerQuery.contains('bars') ||
+		  lowerQuery.contains('pub') || lowerQuery.contains('pubs') || lowerQuery.contains('club') ||
+		  lowerQuery.contains('clubs') || lowerQuery.contains('nightclub') || lowerQuery.contains('disco') ||
+		  lowerQuery.contains('cocktail') || lowerQuery.contains('lounge') || lowerQuery.contains('casino') ||
+		  lowerQuery.contains('night') || lowerQuery.contains('drink') || lowerQuery.contains('drinks')) {
+		return 'nightlife';
 	  }
 	  
 	  return 'restaurant'; // Ultimate fallback
@@ -3287,7 +3297,11 @@ Respond with ONLY this JSON format:
 	  
 		if (categoryLower.contains('nightlife') || categoryLower.contains('bar')) {
 		  return {
-			'amenity': ['bar', 'pub', 'nightclub', 'biergarten']
+			'amenity': ['bar', 'pub', 'nightclub', 'biergarten', 'casino', 'stripclub', 'social_club'],
+			'leisure': ['adult_gaming_centre', 'dance', 'bowling_alley', 'amusement_arcade'],
+			'shop': ['alcohol', 'wine', 'beverages'],
+			'tourism': ['attraction'], // For famous nightlife spots
+			'building': ['commercial'], // Sometimes nightlife venues are tagged as commercial buildings
 		  };
 		}
 
@@ -3652,6 +3666,33 @@ out center meta;
 			if (tags == null) continue;
 
 			final name = tags['name'] ?? tags['brand'] ?? 'Unnamed ${category.toLowerCase()}';
+			
+			// FILTER OUT unwanted categories for nightlife search
+			if (category.toLowerCase().contains('nightlife')) {
+			  final amenity = tags['amenity']?.toString().toLowerCase() ?? '';
+			  final shop = tags['shop']?.toString().toLowerCase() ?? '';
+			  final healthcare = tags['healthcare']?.toString().toLowerCase() ?? '';
+			  final leisure = tags['leisure']?.toString().toLowerCase() ?? '';
+			  final tourism = tags['tourism']?.toString().toLowerCase() ?? '';
+			  final nameLower = name.toLowerCase();
+			  
+			  // Skip non-nightlife places that match by name only
+			  final unwantedAmenities = ['pharmacy', 'hospital', 'clinic', 'dentist', 'doctors', 'school', 'kindergarten', 'fuel', 'bank', 'atm', 'funeral_directors', 'place_of_worship', 'library'];
+			  final unwantedShops = ['hairdresser', 'beauty', 'barber', 'chemist', 'pharmacy', 'funeral_directors'];
+			  final unwantedLeisure = ['sports_club', 'fitness_centre', 'stadium'];
+			  final unwantedTourism = ['attraction']; // Exclude generic tourist attractions from nightlife
+			  final unwantedInName = ['barber', 'friseur', 'apotheke', 'pharmacy', 'school', 'schule', 'kindergarten', 'hospital', 'spital', 'arzt', 'doctor', 'bestattung', 'funeral', 'platz', 'square', 'training', 'sport-club'];
+			  
+			  if (unwantedAmenities.contains(amenity) || 
+				  unwantedShops.contains(shop) || 
+				  unwantedLeisure.contains(leisure) ||
+				  unwantedTourism.contains(tourism) ||
+				  healthcare.isNotEmpty ||
+				  unwantedInName.any((word) => nameLower.contains(word))) {
+				print('🚫 NIGHTLIFE FILTER: Skipping $name (amenity: $amenity, shop: $shop, leisure: $leisure, tourism: $tourism, name contains unwanted words)');
+				continue;
+			  }
+			}
 			
 			// Get coordinates
 			double lat, lng;
@@ -5090,30 +5131,51 @@ Widget _buildResultsSection() {
 			crossAxisAlignment: CrossAxisAlignment.start,
 			children: [
 			  // Image section with separate click handling
-			  if (result.imageUrl != null) 
-				GestureDetector(
-				  onTap: () {
-					// Open location in Google Maps instead of panorama
-					_openInGoogleMaps(result);
+			  //if (result.imageUrl != null) 
+				Builder(
+				  builder: (context) {
+					try {
+					  print('🔍 CONDITION CHECK: ${result.name} - imageUrl: "${result.imageUrl}" - isNull: ${result.imageUrl == null}');
+					  
+					  Widget imageWidget;
+					  if (result.imageUrl != null) {
+						print('🖼️ BUILDING: Real image for ${result.name}');
+						imageWidget = _buildLocationImage(result);
+					  } else {
+						print('🎨 BUILDING: Placeholder for ${result.name}');
+						imageWidget = _buildLocationPlaceholder(result);
+					  }
+					  
+					  return GestureDetector(
+						onTap: () => _openInGoogleMaps(result),
+						child: imageWidget,
+					  );
+					  
+					} catch (e, stackTrace) {
+					  print('❌ ERROR building image for ${result.name}: $e');
+					  print('❌ STACK TRACE: $stackTrace');
+					  return Container(
+						height: 160,
+						color: Colors.red,
+						child: Center(child: Text('ERROR: ${e.toString()}')),
+					  );
+					}
 				  },
-				  child: _buildLocationImage(result),
 				),
 			  
 			  // Content section with separate click handling for task selection
 			  InkWell(
-				borderRadius: result.imageUrl != null 
-					? const BorderRadius.only(
-						bottomLeft: Radius.circular(12),
-						bottomRight: Radius.circular(12),
-					  )
-					: BorderRadius.circular(12),
+					borderRadius: const BorderRadius.only(
+					  bottomLeft: Radius.circular(12),
+					  bottomRight: Radius.circular(12),
+					),
 				onTap: () {
 				  setState(() {
 					result.isSelected = !result.isSelected;
 				  });
 				},
 				child: Padding(
-				  padding: EdgeInsets.all(result.imageUrl != null ? 12 : 16),
+				  padding: const EdgeInsets.all(12),
 				  child: Column(
 					crossAxisAlignment: CrossAxisAlignment.start,
 					children: [
@@ -5303,6 +5365,155 @@ Widget _buildResultsSection() {
 	  );
 	}
 	
+	/// NEW METHOD: Build location placeholder for results without images
+	Widget _buildLocationPlaceholder(AILocationResult result) {
+	  return ClipRRect(
+		borderRadius: const BorderRadius.only(
+		  topLeft: Radius.circular(12),
+		  topRight: Radius.circular(12),
+		),
+		child: Container(
+		  height: 160,
+		  width: double.infinity,
+		  decoration: BoxDecoration(
+			gradient: LinearGradient(
+			  begin: Alignment.topLeft,
+			  end: Alignment.bottomRight,
+			  colors: [
+				_getCategoryColor(result.category).withOpacity(0.1),
+				_getCategoryColor(result.category).withOpacity(0.3),
+			  ],
+			),
+		  ),
+		  child: Stack(
+			children: [
+			  // Main content
+			  Center(
+				child: Column(
+				  mainAxisAlignment: MainAxisAlignment.center,
+				  children: [
+					// Category icon
+					Container(
+					  padding: const EdgeInsets.all(16),
+					  decoration: BoxDecoration(
+						color: _getCategoryColor(result.category).withOpacity(0.2),
+						borderRadius: BorderRadius.circular(20),
+					  ),
+					  child: Icon(
+						_getCategoryIcon(result.category),
+						size: 40,
+						color: _getCategoryColor(result.category),
+					  ),
+					),
+					const SizedBox(height: 12),
+					// Category text
+					Container(
+					  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+					  decoration: BoxDecoration(
+						color: Colors.white.withOpacity(0.9),
+						borderRadius: BorderRadius.circular(8),
+					  ),
+					  child: Text(
+						result.category.replaceAll('_', ' ').toUpperCase(),
+						style: TextStyle(
+						  fontSize: 12,
+						  fontWeight: FontWeight.bold,
+						  color: _getCategoryColor(result.category),
+						),
+					  ),
+					),
+				  ],
+				),
+			  ),
+			  
+			  // Click hint overlay
+			  Positioned(
+				top: 8,
+				right: 8,
+				child: Container(
+				  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+				  decoration: BoxDecoration(
+					color: Colors.black.withOpacity(0.7),
+					borderRadius: BorderRadius.circular(8),
+				  ),
+				  child: Row(
+					mainAxisSize: MainAxisSize.min,
+					children: [
+					  Icon(
+						Icons.map,
+						size: 12,
+						color: Colors.white,
+					  ),
+					  const SizedBox(width: 4),
+					  Text(
+						'TAP TO OPEN',
+						style: TextStyle(
+						  fontSize: 8,
+						  color: Colors.white,
+						  fontWeight: FontWeight.bold,
+						),
+					  ),
+					],
+				  ),
+				),
+			  ),
+			  
+			  // Selection overlay
+			  if (result.isSelected)
+				Positioned.fill(
+				  child: Container(
+					decoration: BoxDecoration(
+					  color: Colors.green.withOpacity(0.2),
+					  border: Border.all(color: Colors.green, width: 2),
+					),
+					child: const Center(
+					  child: Icon(
+						Icons.check_circle,
+						color: Colors.green,
+						size: 40,
+					  ),
+					),
+				  ),
+				),
+			],
+		  ),
+		),
+	  );
+	}	
+	
+	/// NEW METHOD: Get color for category
+	Color _getCategoryColor(String category) {
+	  final categoryLower = category.toLowerCase();
+	  
+	  if (categoryLower.contains('restaurant') || categoryLower.contains('food')) {
+		return Colors.orange;
+	  } else if (categoryLower.contains('cafe') || categoryLower.contains('coffee')) {
+		return Colors.brown;
+	  } else if (categoryLower.contains('bar') || categoryLower.contains('pub') || categoryLower.contains('nightlife')) {
+		return Colors.purple;
+	  } else if (categoryLower.contains('nightclub') || categoryLower.contains('club')) {
+		return Colors.deepPurple;
+	  } else if (categoryLower.contains('museum') || categoryLower.contains('gallery')) {
+		return Colors.indigo;
+	  } else if (categoryLower.contains('pharmacy')) {
+		return Colors.green;
+	  } else if (categoryLower.contains('hospital') || categoryLower.contains('clinic')) {
+		return Colors.red;
+	  } else if (categoryLower.contains('bank') || categoryLower.contains('atm')) {
+		return Colors.blue;
+	  } else if (categoryLower.contains('fuel') || categoryLower.contains('gas')) {
+		return Colors.amber;
+	  } else if (categoryLower.contains('shop') || categoryLower.contains('store')) {
+		return Colors.teal;
+	  } else if (categoryLower.contains('theatre') || categoryLower.contains('cinema')) {
+		return Colors.pink;
+	  } else if (categoryLower.contains('tourism') || categoryLower.contains('attraction')) {
+		return Colors.cyan;
+	  } else {
+		return Colors.blueGrey;
+	  }
+	}
+
 	/// NEW METHOD: Build location image widget
 	/// UPDATED METHOD: Build location image widget with improved loading
 	Widget _buildLocationImage(AILocationResult result) {
