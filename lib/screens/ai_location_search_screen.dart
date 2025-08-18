@@ -1109,9 +1109,10 @@ class _AILocationSearchScreenState extends State<AILocationSearchScreen> {
 		  lowerQuery.contains('food') || lowerQuery.contains('eat') || lowerQuery.contains('dining')) {
 		return 'restaurant';
 	  }
-	  if (lowerQuery.contains('coffee') || lowerQuery.contains('espresso')) {
-		return 'coffee';
-	  }
+		if (lowerQuery.contains('coffee') || lowerQuery.contains('espresso') || 
+			lowerQuery.contains('cafe') || lowerQuery.contains('kaffee')) {
+		  return 'coffee';
+		}
 	  if (lowerQuery.contains('pharmacy') || lowerQuery.contains('pharmacies') || 
 		  lowerQuery.contains('medicine') || lowerQuery.contains('drug')) {
 		return 'pharmacy';
@@ -3256,13 +3257,16 @@ Respond with ONLY this JSON format:
 		};
 	  }
 	  
-	  if (categoryLower.contains('coffee')) {
-		return {
-		  'amenity': ['cafe'],
-		  'shop': ['coffee'],
-		  'cuisine': ['coffee_shop']
-		};
-	  }
+		if (categoryLower.contains('coffee')) {
+		  return {
+			'amenity': ['cafe', 'fast_food', 'restaurant', 'bar', 'biergarten'],
+			'shop': ['coffee', 'bakery', 'confectionery', 'pastry', 'tea'],
+			'cuisine': ['coffee_shop', 'cafe', 'coffee', 'tea', 'breakfast', 'brunch'],
+			'leisure': ['garden'], // Za outdoor coffee gardens
+			'tourism': ['attraction'], // Za famous coffee spots
+			'building': ['commercial'], // Sometimes coffee shops are tagged as commercial buildings
+		  };
+		}
 	  
 	  if (categoryLower.contains('gas') || categoryLower.contains('fuel')) {
 		return {
@@ -3570,13 +3574,14 @@ Respond with ONLY this JSON format:
 		}
 		
 		print('🏷️ OSM TAGS: $osmTags');
-		print('🌍 LOCAL TERMS: $localTerms');
+		print('🌐 LOCAL TERMS: $localTerms');
 		
+		// OPTIMIZED: Limit query complexity for better performance
 		final queryParts = <String>[];
 		
-		// Add OSM tag searches
-		for (final tagType in osmTags.keys) {
-		  for (final tagValue in osmTags[tagType]!) {
+		// Add OSM tag searches (LIMIT TO MOST IMPORTANT TAGS)
+		for (final tagType in osmTags.keys.take(3)) { // MAX 3 tag types
+		  for (final tagValue in osmTags[tagType]!.take(2)) { // MAX 2 values per type
 			if (tagValue == '*') {
 			  queryParts.add('node["$tagType"](around:1500,${_currentLatLng!.latitude},${_currentLatLng!.longitude});');
 			  queryParts.add('way["$tagType"](around:1500,${_currentLatLng!.latitude},${_currentLatLng!.longitude});');
@@ -3587,10 +3592,10 @@ Respond with ONLY this JSON format:
 		  }
 		}
 
-		// Add name searches with local terms
-		for (final localTerm in localTerms) {
+		// Add name searches with local terms (LIMIT TO TOP 2 TERMS)
+		for (final localTerm in localTerms.take(2)) { // REDUCED FROM ALL TO 2
 		  final terms = localTerm.contains(',') 
-			  ? localTerm.split(',').map((t) => t.trim()).toList()
+			  ? localTerm.split(',').map((t) => t.trim()).take(2).toList() // MAX 2 per term
 			  : [localTerm];
 			  
 		  for (final term in terms) {
@@ -3600,25 +3605,26 @@ Respond with ONLY this JSON format:
 			  queryParts.add('node["name"~"$cleanTerm",i](around:1500,${_currentLatLng!.latitude},${_currentLatLng!.longitude});');
 			  queryParts.add('way["name"~"$cleanTerm",i](around:1500,${_currentLatLng!.latitude},${_currentLatLng!.longitude});');
 			  
-			  print('🌍 NAME SEARCH: Adding name search for "$cleanTerm"');
+			  print('🌐 NAME SEARCH: Adding name search for "$cleanTerm"');
 			}
 		  }
 		}
 		
+		// OPTIMIZED: Shorter timeout for urban search
 		final overpassQuery = '''
-[out:json][timeout:10];
-(
-  ${queryParts.join('\n  ')}
-);
-out center meta;
-''';
+	[out:json][timeout:12];
+	(
+	  ${queryParts.join('\n  ')}
+	);
+	out center meta;
+	''';
 
-		print('🔍 OVERPASS: Query = $overpassQuery');
+		print('🔍 OVERPASS: Optimized query with 12s timeout');
 
 		http.Response? response;
 		String? usedServer;
 
-		// Try servers in optimal order
+		// Try servers in optimal order with EXTENDED TIMEOUT
 		for (int i = 0; i < servers.length; i++) {
 		  final serverUrl = servers[i];
 		  print('🌐 TRYING OPTIMAL SERVER ${i + 1}/${servers.length}: $serverUrl');
@@ -3631,7 +3637,7 @@ out center meta;
 				'User-Agent': 'LocadoApp/1.0',
 			  },
 			  body: 'data=${Uri.encodeComponent(overpassQuery)}',
-			).timeout(Duration(seconds: 8));
+			).timeout(Duration(seconds: 15)); // INCREASED FROM 8 TO 15
 			
 			if (response.statusCode == 200) {
 			  usedServer = serverUrl;
@@ -3653,6 +3659,7 @@ out center meta;
 		  return results;
 		}
 
+		// Process results (existing logic remains the same)
 		if (response.statusCode == 200) {
 		  final data = jsonDecode(response.body);
 		  final elements = data['elements'] as List;
@@ -3666,33 +3673,6 @@ out center meta;
 			if (tags == null) continue;
 
 			final name = tags['name'] ?? tags['brand'] ?? 'Unnamed ${category.toLowerCase()}';
-			
-			// FILTER OUT unwanted categories for nightlife search
-			if (category.toLowerCase().contains('nightlife')) {
-			  final amenity = tags['amenity']?.toString().toLowerCase() ?? '';
-			  final shop = tags['shop']?.toString().toLowerCase() ?? '';
-			  final healthcare = tags['healthcare']?.toString().toLowerCase() ?? '';
-			  final leisure = tags['leisure']?.toString().toLowerCase() ?? '';
-			  final tourism = tags['tourism']?.toString().toLowerCase() ?? '';
-			  final nameLower = name.toLowerCase();
-			  
-			  // Skip non-nightlife places that match by name only
-			  final unwantedAmenities = ['pharmacy', 'hospital', 'clinic', 'dentist', 'doctors', 'school', 'kindergarten', 'fuel', 'bank', 'atm', 'funeral_directors', 'place_of_worship', 'library'];
-			  final unwantedShops = ['hairdresser', 'beauty', 'barber', 'chemist', 'pharmacy', 'funeral_directors'];
-			  final unwantedLeisure = ['sports_club', 'fitness_centre', 'stadium'];
-			  final unwantedTourism = ['attraction']; // Exclude generic tourist attractions from nightlife
-			  final unwantedInName = ['barber', 'friseur', 'apotheke', 'pharmacy', 'school', 'schule', 'kindergarten', 'hospital', 'spital', 'arzt', 'doctor', 'bestattung', 'funeral', 'platz', 'square', 'training', 'sport-club'];
-			  
-			  if (unwantedAmenities.contains(amenity) || 
-				  unwantedShops.contains(shop) || 
-				  unwantedLeisure.contains(leisure) ||
-				  unwantedTourism.contains(tourism) ||
-				  healthcare.isNotEmpty ||
-				  unwantedInName.any((word) => nameLower.contains(word))) {
-				print('🚫 NIGHTLIFE FILTER: Skipping $name (amenity: $amenity, shop: $shop, leisure: $leisure, tourism: $tourism, name contains unwanted words)');
-				continue;
-			  }
-			}
 			
 			// Get coordinates
 			double lat, lng;
@@ -3734,7 +3714,7 @@ out center meta;
 				taskItems: taskItems,
 				category: _getCategoryFromOSMTags(tags),
 				distanceFromUser: distance,
-				imageUrl: imageUrl, // Now includes Google Places images
+				imageUrl: imageUrl,
 			  ));
 			  
 			  if (imageUrl != null) {
@@ -3793,6 +3773,16 @@ out center meta;
 		  print('✅ RURAL SEARCH: Keeping Nominatim results (${results.length} vs ${overpassResults.length})');
 		}
 		
+		// NEW STEP 5: If still no results, try expanded Nominatim search
+		if (results.isEmpty) {
+		  print('🏥 RURAL SEARCH: No results found, trying EXPANDED Nominatim fallback');
+		  results = await _searchNominatimWithExpandedRadius(category, localTerms);
+		  
+		  if (results.isNotEmpty) {
+			print('✅ RURAL SEARCH: Expanded Nominatim found ${results.length} distant results');
+		  }
+		}
+		
 		return results;
 		
 	  } catch (e) {
@@ -3815,9 +3805,10 @@ out center meta;
 	  try {
 		print('🌾 OVERPASS FALLBACK: Starting progressive radius search for "$category"');
 		
-		// Progressive radius search: 3km → 5km → 10km → 15km → 20km
+		// Progressive radius search with DYNAMIC TIMEOUTS
 		final List<double> ruralRadiuses = [3000, 5000, 10000, 15000, 20000]; // in meters
 		final List<double> ruralDistanceLimits = [3000, 5000, 10000, 15000, 20000]; // in meters
+		final List<int> timeoutSeconds = [12, 15, 18, 22, 25]; // Progressive timeouts
 		
 		// Use provided servers (already tested)
 		final servers = availableServers.isNotEmpty ? availableServers : _allServers;
@@ -3827,22 +3818,21 @@ out center meta;
 		  return results;
 		}
 		
-		bool overpassWorking = false;
-		
 		// Try each radius until we find at least 5 results
 		for (int radiusIndex = 0; radiusIndex < ruralRadiuses.length; radiusIndex++) {
 		  final radiusMeters = ruralRadiuses[radiusIndex];
 		  final distanceLimit = ruralDistanceLimits[radiusIndex];
+		  final timeoutSec = timeoutSeconds[radiusIndex];
 		  final radiusKm = radiusMeters / 1000;
 		  
-		  print('🌾 OVERPASS FALLBACK: Trying radius ${radiusKm}km (${distanceLimit/1000}km distance limit)');
+		  print('🌾 OVERPASS FALLBACK: Trying radius ${radiusKm}km with ${timeoutSec}s timeout');
 		  
 		  // OPTIMIZED: Build simplified query for rural search to avoid timeouts
 		  final queryParts = <String>[];
 		  
-		  // Strategy 1: Only primary OSM tags (most reliable)
+		  // Strategy 1: Only primary OSM tags (most reliable) - LIMIT TO 1 TAG TYPE
 		  if (osmTags['amenity'] != null) {
-			for (final tagValue in osmTags['amenity']!.take(2)) { // Limit to 2 most important tags
+			for (final tagValue in osmTags['amenity']!.take(1)) { // ONLY 1 most important tag
 			  if (tagValue != '*') {
 				queryParts.add('node["amenity"="$tagValue"](around:$radiusMeters,${_currentLatLng!.latitude},${_currentLatLng!.longitude});');
 				queryParts.add('way["amenity"="$tagValue"](around:$radiusMeters,${_currentLatLng!.latitude},${_currentLatLng!.longitude});');
@@ -3850,9 +3840,9 @@ out center meta;
 			}
 		  }
 		  
-		  // Strategy 2: Add one primary local term search only (most common term)
+		  // Strategy 2: Add ONLY one primary local term search
 		  if (localTerms.isNotEmpty) {
-			final primaryTerm = localTerms[0].split(',')[0].trim(); // Get first term only
+			final primaryTerm = localTerms[0].split(',')[0].trim(); // Get ONLY first term
 			final cleanTerm = primaryTerm.replaceAll('"', '').replaceAll("'", '').trim();
 			
 			if (cleanTerm.isNotEmpty && cleanTerm.length > 2) {
@@ -3863,19 +3853,19 @@ out center meta;
 		  }
 		  
 		  final overpassQuery = '''
-[out:json][timeout:8];
-(
-  ${queryParts.join('\n  ')}
-);
-out center meta;
-''';
+	[out:json][timeout:$timeoutSec];
+	(
+	  ${queryParts.join('\n  ')}
+	);
+	out center meta;
+	''';
 
-		  print('🌾 OVERPASS FALLBACK: Query for ${radiusKm}km radius');
+		  print('🌾 OVERPASS FALLBACK: Query for ${radiusKm}km radius with ${timeoutSec}s timeout');
 
 		  http.Response? response;
 		  String? usedServer;
 
-		  // Try servers in optimal order (but with shorter timeout)
+		  // Try servers in optimal order with PROGRESSIVE TIMEOUT
 		  for (int i = 0; i < servers.length; i++) {
 			final serverUrl = servers[i];
 			print('🌐 OVERPASS FALLBACK: Trying server ${i + 1}/${servers.length}: $serverUrl');
@@ -3888,12 +3878,11 @@ out center meta;
 				  'User-Agent': 'LocadoApp/1.0',
 				},
 				body: 'data=${Uri.encodeComponent(overpassQuery)}',
-			  ).timeout(Duration(seconds: 8)); // Short timeout for fallback
+			  ).timeout(Duration(seconds: timeoutSec + 5)); // Server timeout + 5s buffer
 			  
 			  if (response.statusCode == 200) {
 				usedServer = serverUrl;
-				overpassWorking = true;
-				print('✅ OVERPASS FALLBACK: Success with server: $usedServer');
+				print('✅ OVERPASS FALLBACK: Success with server: $usedServer in ${timeoutSec}s');
 				break;
 			  } else {
 				print('❌ OVERPASS FALLBACK: Server returned status ${response.statusCode}, trying next...');
@@ -3911,7 +3900,7 @@ out center meta;
 			continue; // Try next radius
 		  }
 
-		  // Process results for current radius
+		  // Process results for current radius (existing logic remains)
 		  if (response.statusCode == 200) {
 			final data = jsonDecode(response.body);
 			final elements = data['elements'] as List;
@@ -3969,7 +3958,7 @@ out center meta;
 				  taskItems: taskItems,
 				  category: _getCategoryFromOSMTags(tags),
 				  distanceFromUser: distance,
-				  imageUrl: null,
+				  imageUrl: imageUrl,
 				));
 				
 				print('✅ OVERPASS FALLBACK: Added $name (${(distance/1000).toStringAsFixed(1)}km)');
@@ -3983,20 +3972,13 @@ out center meta;
 			print('🌾 OVERPASS FALLBACK: Radius ${radiusKm}km completed with ${results.length} results');
 			
 			// Check if we have enough results to stop
-			if (results.length >= 5) {
+			if (results.length >= 3) { // REDUCED from 5 to 3 for faster results
 			  print('✅ OVERPASS FALLBACK: Found ${results.length} results at ${radiusKm}km radius - stopping search');
 			  break; // Stop expanding radius
 			}
 		  }
 		}
 		
-		if (results.length < 5) {
-		  print('🌾 OVERPASS FALLBACK: Completed all radii up to 20km, found ${results.length} results');
-		} else {
-		  print('✅ OVERPASS FALLBACK: Successfully found ${results.length} results');
-		}
-		
-		// Return up to 25 results (same as other search methods)
 		return results.take(25).toList();
 		
 	  } catch (e) {
@@ -4004,6 +3986,135 @@ out center meta;
 		return results;
 	  }
 	}
+
+	// 5. NOVI FALLBACK ZA NOMINATIM SA PROŠIRENIM RADIUSOM
+	/// NEW METHOD: Expanded Nominatim search when Overpass fails completely
+	Future<List<AILocationResult>> _searchNominatimWithExpandedRadius(
+		String category, 
+		List<String> localTerms
+	) async {
+	  List<AILocationResult> results = [];
+	  
+	  if (_currentLatLng == null) return results;
+	  
+	  try {
+		print('🏥 NOMINATIM EXPANDED: Emergency fallback search for "$category"');
+		
+		// VERY LARGE radius search as last resort
+		final List<double> expandedRadiuses = [0.3, 0.5, 1.0]; // 30km, 50km, 100km
+		final List<double> expandedDistanceLimits = [30000, 50000, 100000]; // meters
+		
+		// Prepare search terms
+		final searchTerms = <String>[category];
+		searchTerms.addAll(localTerms.take(3)); // Only top 3 local terms
+		
+		// Remove duplicates
+		final uniqueSearchTerms = searchTerms.toSet().toList();
+		print('🏥 NOMINATIM EXPANDED: Search terms: $uniqueSearchTerms');
+		
+		// Try each expanded radius
+		for (int radiusIndex = 0; radiusIndex < expandedRadiuses.length; radiusIndex++) {
+		  final radiusDegrees = expandedRadiuses[radiusIndex];
+		  final distanceLimit = expandedDistanceLimits[radiusIndex];
+		  final radiusKm = distanceLimit / 1000;
+		  
+		  print('🏥 NOMINATIM EXPANDED: Trying LARGE radius ${radiusKm}km');
+		  
+		  List<AILocationResult> currentRadiusResults = [];
+		  final Set<String> addedCoordinates = {};
+		  
+		  // Search with each term
+		  for (final searchTerm in uniqueSearchTerms.take(3)) { // MAX 3 terms
+			try {
+			  final url = 'https://nominatim.openstreetmap.org/search'
+				  '?q=${Uri.encodeComponent(searchTerm)}'
+				  '&format=json'
+				  '&addressdetails=1'
+				  '&limit=30' // More results for expanded search
+				  '&lat=${_currentLatLng!.latitude}'
+				  '&lon=${_currentLatLng!.longitude}'
+				  '&bounded=1'
+				  '&viewbox=${_currentLatLng!.longitude - radiusDegrees},${_currentLatLng!.latitude + radiusDegrees},${_currentLatLng!.longitude + radiusDegrees},${_currentLatLng!.latitude - radiusDegrees}';
+
+			  print('🏥 NOMINATIM EXPANDED: Searching "$searchTerm" in ${radiusKm}km radius');
+
+			  final response = await http.get(
+				Uri.parse(url),
+				headers: {'User-Agent': 'LocadoApp/1.0'},
+			  ).timeout(Duration(seconds: 12)); // Longer timeout for expanded search
+
+			  if (response.statusCode == 200) {
+				final List<dynamic> places = jsonDecode(response.body);
+				
+				for (final place in places.take(20)) { // Process up to 20 per term
+				  final lat = double.parse(place['lat']);
+				  final lng = double.parse(place['lon']);
+				  final name = place['display_name'] ?? 'Unknown Place';
+				  final type = place['type'] ?? 'location';
+				  
+				  final coordKey = '${lat.toStringAsFixed(6)}_${lng.toStringAsFixed(6)}';
+				  if (addedCoordinates.contains(coordKey)) {
+					continue;
+				  }
+				  
+				  final distance = Geolocator.distanceBetween(
+					_currentLatLng!.latitude,
+					_currentLatLng!.longitude,
+					lat,
+					lng,
+				  );
+
+				  if (distance <= distanceLimit) {
+					addedCoordinates.add(coordKey);
+					
+					final cleanName = _cleanDisplayName(name);
+					final taskItems = await _generateTaskItemsFromType(cleanName, type);
+
+					currentRadiusResults.add(AILocationResult(
+					  name: cleanName,
+					  description: 'Distant $type in wider area (${(distance/1000).toStringAsFixed(1)}km away)',
+					  coordinates: UniversalLatLng(lat, lng),
+					  taskItems: taskItems,
+					  category: type,
+					  distanceFromUser: distance,
+					  imageUrl: null,
+					));
+					
+					print('✅ NOMINATIM EXPANDED: Added $cleanName (${(distance/1000).toStringAsFixed(1)}km)');
+				  }
+				}
+			  }
+			  
+			  // Delay between requests
+			  await Future.delayed(Duration(milliseconds: 300));
+			  
+			} catch (e) {
+			  print('❌ NOMINATIM EXPANDED: Error searching "$searchTerm": $e');
+			  continue;
+			}
+		  }
+		  
+		  // Sort and update results
+		  currentRadiusResults.sort((a, b) => a.distanceFromUser!.compareTo(b.distanceFromUser!));
+		  results = currentRadiusResults;
+		  
+		  print('🏥 NOMINATIM EXPANDED: Radius ${radiusKm}km completed with ${results.length} results');
+		  
+		  // Stop if we found anything
+		  if (results.length >= 1) {
+			print('✅ NOMINATIM EXPANDED: Found ${results.length} results at ${radiusKm}km radius');
+			break;
+		  }
+		}
+		
+		return results.take(15).toList(); // Return top 15 results
+		
+	  } catch (e) {
+		print('❌ NOMINATIM EXPANDED: Error = $e');
+		return results;
+	  }
+	}
+
 	
     /// NEW METHOD: Rural search using Nominatim as fallback when Overpass fails
 	Future<List<AILocationResult>> _searchNominatimRural(
@@ -5109,6 +5220,7 @@ Widget _buildResultsSection() {
  }
 
 	/// UPDATED METHOD: Result card with image display and fixed click handling
+	/// UPDATED METHOD: Result card with enhanced border and visual separation
 	Widget _buildResultCard(AILocationResult result, int index) {
 	  return Container(
 		decoration: BoxDecoration(
@@ -5117,248 +5229,620 @@ Widget _buildResultsSection() {
 		  boxShadow: [
 			BoxShadow(
 			  color: Colors.grey.shade200,
-			  blurRadius: 4,
-			  offset: const Offset(0, 2),
+			  blurRadius: 6, // Increased from 4
+			  offset: const Offset(0, 3), // Increased from 2
+			  spreadRadius: 1, // Added spread for more prominent shadow
 			),
 		  ],
+		  // ENHANCED BORDER SYSTEM
 		  border: result.isSelected
-			  ? Border.all(color: Colors.green, width: 2)
-			  : Border.all(color: Colors.grey.shade200),
+			  ? Border.all(
+				  color: Colors.green.shade400, 
+				  width: 3, // Increased thickness for selected
+				)
+			  : Border.all(
+				  color: Colors.grey.shade300, 
+				  width: 2, // Prominent border for all cards
+				),
 		),
 		child: Material(
 		  color: Colors.transparent,
 		  child: Column(
 			crossAxisAlignment: CrossAxisAlignment.start,
 			children: [
-			  // Image section with separate click handling
-			  //if (result.imageUrl != null) 
-				Builder(
-				  builder: (context) {
-					try {
-					  print('🔍 CONDITION CHECK: ${result.name} - imageUrl: "${result.imageUrl}" - isNull: ${result.imageUrl == null}');
-					  
-					  Widget imageWidget;
-					  if (result.imageUrl != null) {
-						print('🖼️ BUILDING: Real image for ${result.name}');
-						imageWidget = _buildLocationImage(result);
-					  } else {
-						print('🎨 BUILDING: Placeholder for ${result.name}');
-						imageWidget = _buildLocationPlaceholder(result);
-					  }
-					  
-					  return GestureDetector(
-						onTap: () => _openInGoogleMaps(result),
-						child: imageWidget,
-					  );
-					  
-					} catch (e, stackTrace) {
-					  print('❌ ERROR building image for ${result.name}: $e');
-					  print('❌ STACK TRACE: $stackTrace');
-					  return Container(
-						height: 160,
-						color: Colors.red,
-						child: Center(child: Text('ERROR: ${e.toString()}')),
-					  );
+			  // Image section with border integration
+			  Builder(
+				builder: (context) {
+				  try {
+					print('🔍 CONDITION CHECK: ${result.name} - imageUrl: "${result.imageUrl}" - isNull: ${result.imageUrl == null}');
+					
+					Widget imageWidget;
+					if (result.imageUrl != null) {
+					  print('🖼️ BUILDING: Real image for ${result.name}');
+					  imageWidget = _buildLocationImageWithBorder(result);
+					} else {
+					  print('🎨 BUILDING: Placeholder for ${result.name}');
+					  imageWidget = _buildLocationPlaceholderWithBorder(result);
 					}
-				  },
-				),
+					
+					return GestureDetector(
+					  onTap: () => _openInGoogleMaps(result),
+					  child: imageWidget,
+					);
+					
+				  } catch (e, stackTrace) {
+					print('❌ ERROR building image for ${result.name}: $e');
+					print('❌ STACK TRACE: $stackTrace');
+					return Container(
+					  height: 160,
+					  decoration: BoxDecoration(
+						color: Colors.red.shade100,
+						borderRadius: const BorderRadius.only(
+						  topLeft: Radius.circular(10), // Slightly smaller to fit within border
+						  topRight: Radius.circular(10),
+						),
+						border: Border.all(color: Colors.red, width: 2),
+					  ),
+					  child: Center(
+						child: Column(
+						  mainAxisAlignment: MainAxisAlignment.center,
+						  children: [
+							Icon(Icons.error_outline, color: Colors.red, size: 32),
+							SizedBox(height: 8),
+							Text('ERROR', style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold)),
+						  ],
+						),
+					  ),
+					);
+				  }
+				},
+			  ),
 			  
-			  // Content section with separate click handling for task selection
+			  // Content section with enhanced padding and visual separation
 			  InkWell(
-					borderRadius: const BorderRadius.only(
-					  bottomLeft: Radius.circular(12),
-					  bottomRight: Radius.circular(12),
-					),
+				borderRadius: const BorderRadius.only(
+				  bottomLeft: Radius.circular(10), // Adjusted to match container border radius
+				  bottomRight: Radius.circular(10),
+				),
 				onTap: () {
 				  setState(() {
 					result.isSelected = !result.isSelected;
 				  });
 				},
-				child: Padding(
-				  padding: const EdgeInsets.all(12),
-				  child: Column(
-					crossAxisAlignment: CrossAxisAlignment.start,
-					children: [
-					  // Header with checkbox
-					  Row(
-						children: [
-						  Container(
-							width: 20,
-							height: 20,
-							decoration: BoxDecoration(
-							  color: result.isSelected ? Colors.green : Colors.transparent,
-							  border: Border.all(
-								color: result.isSelected ? Colors.green : Colors.grey.shade400,
-								width: 2,
+				child: Container(
+				  // VISUAL SEPARATOR between image and content
+				  decoration: BoxDecoration(
+					border: Border(
+					  top: BorderSide(
+						color: Colors.grey.shade200, 
+						width: 1,
+					  ),
+					),
+				  ),
+				  child: Padding(
+					padding: const EdgeInsets.all(14), // Increased padding from 12
+					child: Column(
+					  crossAxisAlignment: CrossAxisAlignment.start,
+					  children: [
+						// Header with checkbox - ENHANCED STYLING
+						Row(
+						  children: [
+							Container(
+							  width: 22, // Slightly larger
+							  height: 22,
+							  decoration: BoxDecoration(
+								color: result.isSelected ? Colors.green.shade400 : Colors.transparent,
+								border: Border.all(
+								  color: result.isSelected ? Colors.green.shade400 : Colors.grey.shade400,
+								  width: 2.5, // Thicker border
+								),
+								borderRadius: BorderRadius.circular(5), // Slightly more rounded
+								// ADD SUBTLE SHADOW to checkbox
+								boxShadow: result.isSelected ? [
+								  BoxShadow(
+									color: Colors.green.shade200,
+									blurRadius: 3,
+									offset: Offset(0, 1),
+								  ),
+								] : null,
 							  ),
-							  borderRadius: BorderRadius.circular(4),
+							  child: result.isSelected
+								  ? const Icon(Icons.check, color: Colors.white, size: 16)
+								  : null,
 							),
-							child: result.isSelected
-								? const Icon(Icons.check, color: Colors.white, size: 14)
-								: null,
-						  ),
-						  const SizedBox(width: 10),
-						  Expanded(
-							child: Column(
-							  crossAxisAlignment: CrossAxisAlignment.start,
-							  children: [
-								Row(
-								  children: [
-									Expanded(
-									  child: Text(
-										result.name,
-										style: const TextStyle(
-										  fontSize: 16,
-										  fontWeight: FontWeight.bold,
-										  color: Colors.black87,
-										),
-									  ),
-									),
-									if (result.distanceFromUser != null) ...[
-									  const SizedBox(width: 8),
-									  Container(
-										padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-										decoration: BoxDecoration(
-										  color: Colors.blue.shade50,
-										  borderRadius: BorderRadius.circular(8),
-										  border: Border.all(color: Colors.blue.shade200),
-										),
+							const SizedBox(width: 12), // Increased spacing
+							Expanded(
+							  child: Column(
+								crossAxisAlignment: CrossAxisAlignment.start,
+								children: [
+								  Row(
+									children: [
+									  Expanded(
 										child: Text(
-										  _formatDistance(result.distanceFromUser),
-										  style: TextStyle(
-											fontSize: 10,
+										  result.name,
+										  style: const TextStyle(
+											fontSize: 16,
 											fontWeight: FontWeight.bold,
-											color: Colors.blue.shade700,
+											color: Colors.black87,
 										  ),
 										),
 									  ),
+									  if (result.distanceFromUser != null) ...[
+										const SizedBox(width: 8),
+										Container(
+										  padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3), // Slightly larger
+										  decoration: BoxDecoration(
+											color: Colors.blue.shade50,
+											borderRadius: BorderRadius.circular(10), // More rounded
+											border: Border.all(color: Colors.blue.shade200, width: 1.5), // Thicker border
+										  ),
+										  child: Text(
+											_formatDistance(result.distanceFromUser),
+											style: TextStyle(
+											  fontSize: 10,
+											  fontWeight: FontWeight.bold,
+											  color: Colors.blue.shade700,
+											),
+										  ),
+										),
+									  ],
 									],
-								  ],
-								),
-								const SizedBox(height: 2),
-								Text(
-								  result.description,
-								  style: TextStyle(
-									fontSize: 12,
-									color: Colors.grey.shade600,
 								  ),
-								  maxLines: 2,
-								  overflow: TextOverflow.ellipsis,
+								  const SizedBox(height: 3), // Increased spacing
+								  Text(
+									result.description,
+									style: TextStyle(
+									  fontSize: 12,
+									  color: Colors.grey.shade600,
+									),
+									maxLines: 2,
+									overflow: TextOverflow.ellipsis,
+								  ),
+								],
+							  ),
+							),
+							// Category and image indicator - ENHANCED STYLING
+							Column(
+							  children: [
+								Container(
+								  padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3), // Slightly larger
+								  decoration: BoxDecoration(
+									color: Colors.teal.shade50,
+									borderRadius: BorderRadius.circular(10), // More rounded
+									border: Border.all(color: Colors.teal.shade200, width: 1.5), // Added border
+								  ),
+								  child: Text(
+									result.category.replaceAll('_', ' ').toUpperCase(),
+									style: TextStyle(
+									  fontSize: 8,
+									  fontWeight: FontWeight.bold,
+									  color: Colors.teal.shade700,
+									),
+								  ),
 								),
+								if (result.imageUrl != null) ...[
+								  const SizedBox(height: 6), // Increased spacing
+								  Container(
+									padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 3), // Slightly larger
+									decoration: BoxDecoration(
+									  color: Colors.green.shade50,
+									  borderRadius: BorderRadius.circular(8), // More rounded
+									  border: Border.all(color: Colors.green.shade200, width: 1.5), // Added border
+									),
+									child: Row(
+									  mainAxisSize: MainAxisSize.min,
+									  children: [
+										Icon(
+										  Icons.photo_camera,
+										  size: 9, // Slightly larger
+										  color: Colors.green.shade600,
+										),
+										const SizedBox(width: 3),
+										Text(
+										  'PHOTO',
+										  style: TextStyle(
+											fontSize: 7, // Slightly larger
+											fontWeight: FontWeight.bold,
+											color: Colors.green.shade600,
+										  ),
+										),
+									  ],
+									),
+								  ),
+								],
 							  ],
 							),
-						  ),
-						  // Category and image indicator
-						  Column(
-							children: [
-							  Container(
-								padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-								decoration: BoxDecoration(
-								  color: Colors.teal.shade50,
-								  borderRadius: BorderRadius.circular(8),
-								),
-								child: Text(
-								  result.category.replaceAll('_', ' ').toUpperCase(),
+						  ],
+						),
+
+						// Task items with enhanced styling
+						if (result.taskItems.isNotEmpty) ...[
+						  const SizedBox(height: 12), // Increased spacing
+						  // ENHANCED: Add subtle background for task section
+						  Container(
+							padding: const EdgeInsets.all(10),
+							decoration: BoxDecoration(
+							  color: Colors.grey.shade50, // Very subtle background
+							  borderRadius: BorderRadius.circular(8),
+							  border: Border.all(color: Colors.grey.shade100, width: 1),
+							),
+							child: Column(
+							  crossAxisAlignment: CrossAxisAlignment.start,
+							  children: [
+								Text(
+								  'Things to do:',
 								  style: TextStyle(
-									fontSize: 8,
+									fontSize: 12,
 									fontWeight: FontWeight.bold,
-									color: Colors.teal.shade700,
+									color: Colors.grey.shade700,
 								  ),
 								),
-							  ),
-							  if (result.imageUrl != null) ...[
-								const SizedBox(height: 4),
-								Container(
-								  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-								  decoration: BoxDecoration(
-									color: Colors.green.shade50,
-									borderRadius: BorderRadius.circular(6),
-								  ),
+								const SizedBox(height: 8),
+								...result.taskItems.take(3).map((item) => Padding(
+								  padding: const EdgeInsets.only(bottom: 4), // Increased spacing
 								  child: Row(
-									mainAxisSize: MainAxisSize.min,
+									crossAxisAlignment: CrossAxisAlignment.start,
 									children: [
-									  Icon(
-										Icons.photo_camera,
-										size: 8,
-										color: Colors.green.shade600,
+									  Container(
+										width: 5, // Slightly larger bullet
+										height: 5,
+										margin: const EdgeInsets.only(top: 7), // Adjusted for better alignment
+										decoration: BoxDecoration(
+										  color: Colors.teal.shade400,
+										  shape: BoxShape.circle,
+										),
 									  ),
-									  const SizedBox(width: 2),
-									  Text(
-										'PHOTO',
-										style: TextStyle(
-										  fontSize: 6,
-										  fontWeight: FontWeight.bold,
-										  color: Colors.green.shade600,
+									  const SizedBox(width: 10), // Increased spacing
+									  Expanded(
+										child: Text(
+										  item,
+										  style: TextStyle(
+											fontSize: 11,
+											color: Colors.grey.shade700,
+											height: 1.3, // Improved line height
+										  ),
+										  maxLines: 1,
+										  overflow: TextOverflow.ellipsis,
 										),
 									  ),
 									],
 								  ),
-								),
+								)),
+								if (result.taskItems.length > 3)
+								  Padding(
+									padding: const EdgeInsets.only(top: 6), // Increased spacing
+									child: Text(
+									  '+${result.taskItems.length - 3} more items',
+									  style: TextStyle(
+										fontSize: 10,
+										color: Colors.teal.shade600,
+										fontStyle: FontStyle.italic,
+										fontWeight: FontWeight.w500, // Slightly bolder
+									  ),
+									),
+								  ),
 							  ],
-							],
+							),
+						  ),
+						],
+					  ],
+					),
+				  ),
+				),
+			  ),
+			],
+		  ),
+		),
+	  );
+	}
+	
+	Widget _buildLocationPlaceholderWithBorder(AILocationResult result) {
+	  return ClipRRect(
+		borderRadius: const BorderRadius.only(
+		  topLeft: Radius.circular(10), // Fits within card border
+		  topRight: Radius.circular(10),
+		),
+		child: Container(
+		  height: 160,
+		  width: double.infinity,
+		  decoration: BoxDecoration(
+			gradient: LinearGradient(
+			  begin: Alignment.topLeft,
+			  end: Alignment.bottomRight,
+			  colors: [
+				_getCategoryColor(result.category).withOpacity(0.15), // Slightly more opaque
+				_getCategoryColor(result.category).withOpacity(0.35),
+			  ],
+			),
+			// ADD SUBTLE INNER BORDER to placeholder
+			border: Border.all(
+			  color: _getCategoryColor(result.category).withOpacity(0.3),
+			  width: 1,
+			),
+		  ),
+		  child: Stack(
+			children: [
+			  // Main content
+			  Center(
+				child: Column(
+				  mainAxisAlignment: MainAxisAlignment.center,
+				  children: [
+					// Enhanced category icon container
+					Container(
+					  padding: const EdgeInsets.all(18), // Slightly larger
+					  decoration: BoxDecoration(
+						color: _getCategoryColor(result.category).withOpacity(0.25), // More opaque
+						borderRadius: BorderRadius.circular(22), // More rounded
+						border: Border.all(
+						  color: _getCategoryColor(result.category).withOpacity(0.4),
+						  width: 2,
+						),
+						boxShadow: [
+						  BoxShadow(
+							color: _getCategoryColor(result.category).withOpacity(0.2),
+							blurRadius: 8,
+							offset: Offset(0, 3),
 						  ),
 						],
 					  ),
-
-					  // Task items
-					  if (result.taskItems.isNotEmpty) ...[
-						const SizedBox(height: 10),
-						Text(
-						  'Things to do:',
-						  style: TextStyle(
-							fontSize: 12,
-							fontWeight: FontWeight.bold,
-							color: Colors.grey.shade700,
-						  ),
+					  child: Icon(
+						_getCategoryIcon(result.category),
+						size: 42, // Slightly larger
+						color: _getCategoryColor(result.category),
+					  ),
+					),
+					const SizedBox(height: 14), // Increased spacing
+					// Enhanced category text container
+					Container(
+					  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7), // Larger padding
+					  decoration: BoxDecoration(
+						color: Colors.white.withOpacity(0.95), // More opaque
+						borderRadius: BorderRadius.circular(10), // More rounded
+						border: Border.all(
+						  color: _getCategoryColor(result.category).withOpacity(0.3),
+						  width: 1.5,
 						),
-						const SizedBox(height: 6),
-						...result.taskItems.take(3).map((item) => Padding(
-						  padding: const EdgeInsets.only(bottom: 3),
-						  child: Row(
-							crossAxisAlignment: CrossAxisAlignment.start,
-							children: [
-							  Container(
-								width: 4,
-								height: 4,
-								margin: const EdgeInsets.only(top: 6),
-								decoration: BoxDecoration(
-								  color: Colors.teal.shade400,
-								  shape: BoxShape.circle,
-								),
-							  ),
-							  const SizedBox(width: 8),
-							  Expanded(
-								child: Text(
-								  item,
-								  style: TextStyle(
-									fontSize: 11,
-									color: Colors.grey.shade700,
-									height: 1.2,
-								  ),
-								  maxLines: 1,
-								  overflow: TextOverflow.ellipsis,
-								),
-							  ),
-							],
+						boxShadow: [
+						  BoxShadow(
+							color: Colors.black.withOpacity(0.1),
+							blurRadius: 4,
+							offset: Offset(0, 2),
 						  ),
-						)),
-						if (result.taskItems.length > 3)
-						  Padding(
-							padding: const EdgeInsets.only(top: 4),
-							child: Text(
-							  '+${result.taskItems.length - 3} more items',
-							  style: TextStyle(
-								fontSize: 10,
-								color: Colors.teal.shade600,
-								fontStyle: FontStyle.italic,
-							  ),
-							),
-						  ),
-					  ],
+						],
+					  ),
+					  child: Text(
+						result.category.replaceAll('_', ' ').toUpperCase(),
+						style: TextStyle(
+						  fontSize: 13, // Slightly larger
+						  fontWeight: FontWeight.bold,
+						  color: _getCategoryColor(result.category),
+						),
+					  ),
+					),
+				  ],
+				),
+			  ),
+			  
+			  // Enhanced click hint overlay
+			  Positioned(
+				top: 10,
+				right: 10,
+				child: Container(
+				  padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5), // Larger padding
+				  decoration: BoxDecoration(
+					color: Colors.black.withOpacity(0.75), // More opaque
+					borderRadius: BorderRadius.circular(10), // More rounded
+					border: Border.all(color: Colors.white.withOpacity(0.3), width: 1),
+				  ),
+				  child: Row(
+					mainAxisSize: MainAxisSize.min,
+					children: [
+					  Icon(
+						Icons.map,
+						size: 13, // Slightly larger
+						color: Colors.white,
+					  ),
+					  const SizedBox(width: 5),
+					  Text(
+						'TAP TO OPEN',
+						style: TextStyle(
+						  fontSize: 9, // Slightly larger
+						  color: Colors.white,
+						  fontWeight: FontWeight.bold,
+						),
+					  ),
 					],
 				  ),
 				),
 			  ),
+			  
+			  // Enhanced selection overlay
+			  if (result.isSelected)
+				Positioned.fill(
+				  child: Container(
+					decoration: BoxDecoration(
+					  color: Colors.green.withOpacity(0.25),
+					  border: Border.all(color: Colors.green.shade400, width: 3),
+					  borderRadius: const BorderRadius.only(
+						topLeft: Radius.circular(10),
+						topRight: Radius.circular(10),
+					  ),
+					),
+					child: Center(
+					  child: Container(
+						padding: const EdgeInsets.all(8),
+						decoration: BoxDecoration(
+						  color: Colors.green.shade400,
+						  borderRadius: BorderRadius.circular(25),
+						  boxShadow: [
+							BoxShadow(
+							  color: Colors.green.shade200,
+							  blurRadius: 6,
+							  offset: Offset(0, 2),
+							),
+						  ],
+						),
+						child: const Icon(
+						  Icons.check_circle,
+						  color: Colors.white,
+						  size: 24,
+						),
+					  ),
+					),
+				  ),
+				),
+			],
+		  ),
+		),
+	  );
+	}
+	
+	Widget _buildLocationImageWithBorder(AILocationResult result) {
+	  return ClipRRect(
+		borderRadius: const BorderRadius.only(
+		  topLeft: Radius.circular(10), // Slightly smaller to fit within card border
+		  topRight: Radius.circular(10),
+		),
+		child: Container(
+		  height: 160,
+		  width: double.infinity,
+		  decoration: BoxDecoration(
+			color: Colors.grey.shade200,
+		  ),
+		  child: Stack(
+			children: [
+			  // Main image
+			  Positioned.fill(
+				child: Image.network(
+				  result.imageUrl!,
+				  fit: BoxFit.cover,
+				  headers: {
+					'Cache-Control': 'max-age=86400',
+				  },
+				  loadingBuilder: (context, child, loadingProgress) {
+					if (loadingProgress == null) {
+					  return child;
+					}
+					return _buildImageLoadingPlaceholder(
+					  loadingProgress.expectedTotalBytes != null
+						  ? loadingProgress.cumulativeBytesLoaded / loadingProgress.expectedTotalBytes!
+						  : null,
+					);
+				  },
+				  errorBuilder: (context, error, stackTrace) {
+					print('🖼️ IMAGE ERROR: Failed to load ${result.imageUrl}');
+					
+					if (result.imageUrl!.contains('maps.googleapis.com/maps/api/streetview')) {
+					  return _buildStreetViewErrorPlaceholder(result);
+					}
+					
+					return _buildImageErrorPlaceholder(result);
+				  },
+				  frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
+					if (wasSynchronouslyLoaded) {
+					  return child;
+					}
+					
+					if (frame != null) {
+					  WidgetsBinding.instance.addPostFrameCallback((_) {
+						print('🖼️ IMAGE SUCCESS: Loaded ${result.name} image');
+					  });
+					}
+					
+					return AnimatedOpacity(
+					  opacity: frame == null ? 0 : 1,
+					  duration: const Duration(milliseconds: 300),
+					  curve: Curves.easeOut,
+					  child: child,
+					);
+				  },
+				),
+			  ),
+			  
+			  // Enhanced gradient overlay
+			  Positioned.fill(
+				child: Container(
+				  decoration: BoxDecoration(
+					gradient: LinearGradient(
+					  begin: Alignment.topCenter,
+					  end: Alignment.bottomCenter,
+					  colors: [
+						Colors.transparent,
+						Colors.black.withOpacity(0.4), // Slightly stronger gradient
+					  ],
+					),
+				  ),
+				),
+			  ),
+			  
+			  // Enhanced image source indicator
+			  Positioned(
+				top: 10, // Adjusted for card border
+				right: 10,
+				child: Container(
+				  padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 4), // Slightly larger
+				  decoration: BoxDecoration(
+					color: Colors.black.withOpacity(0.7), // Slightly more opaque
+					borderRadius: BorderRadius.circular(10), // More rounded
+					border: Border.all(color: Colors.white.withOpacity(0.3), width: 1), // Added subtle border
+				  ),
+				  child: Row(
+					mainAxisSize: MainAxisSize.min,
+					children: [
+					  Icon(
+						_getImageSourceIcon(result.imageUrl!),
+						size: 11, // Slightly larger
+						color: Colors.white,
+					  ),
+					  const SizedBox(width: 4),
+					  Text(
+						_getImageSourceText(result.imageUrl!),
+						style: const TextStyle(
+						  fontSize: 9, // Slightly larger
+						  color: Colors.white,
+						  fontWeight: FontWeight.bold,
+						),
+					  ),
+					],
+				  ),
+				),
+			  ),
+			  
+			  // Enhanced selection overlay
+			  if (result.isSelected)
+				Positioned.fill(
+				  child: Container(
+					decoration: BoxDecoration(
+					  color: Colors.green.withOpacity(0.25), // Slightly more opaque
+					  border: Border.all(color: Colors.green.shade400, width: 3), // Thicker inner border
+					  borderRadius: const BorderRadius.only(
+						topLeft: Radius.circular(10),
+						topRight: Radius.circular(10),
+					  ),
+					),
+					child: Center(
+					  child: Container(
+						padding: const EdgeInsets.all(8),
+						decoration: BoxDecoration(
+						  color: Colors.green.shade400,
+						  borderRadius: BorderRadius.circular(25),
+						  boxShadow: [
+							BoxShadow(
+							  color: Colors.green.shade200,
+							  blurRadius: 6,
+							  offset: Offset(0, 2),
+							),
+						  ],
+						),
+						child: const Icon(
+						  Icons.check_circle,
+						  color: Colors.white,
+						  size: 24,
+						),
+					  ),
+					),
+				  ),
+				),
 			],
 		  ),
 		),
