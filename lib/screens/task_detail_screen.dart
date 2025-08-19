@@ -1462,13 +1462,13 @@ class _TaskDetailScreenState extends State<TaskDetailScreen>
  }
 
  // HYBRID MAP PREVIEW - choose correct widget based on provider
- Widget _buildMapPreview() {
-   if (_currentMapProvider == MapProvider.googleMaps) {
-     return _buildGoogleMapPreview();
-   } else {
-     return _buildOSMMapPreview();
-   }
- }
+	Widget _buildMapPreview() {
+	  if (_currentMapProvider == MapProvider.googleMaps) {
+		return _buildGoogleMapPreview();
+	  } else {
+		return _buildOSMMapPreview(); // Now uses smart centering
+	  }
+	}
 
  // Google Maps preview
  Widget _buildGoogleMapPreview() {
@@ -1496,22 +1496,49 @@ class _TaskDetailScreenState extends State<TaskDetailScreen>
  }
 
  // OpenStreetMap preview  
- Widget _buildOSMMapPreview() {
-   return OSMMapWidget(
-     initialCameraPosition: OSMCameraPosition(
-       target: _selectedLocation?.toOpenStreetMap() ?? 
-               ll.LatLng(widget.taskLocation.latitude, widget.taskLocation.longitude),
-       zoom: 15.0,
-     ),
-     markers: _osmMarkers,
-     onMapCreated: (controller) {
-       _osmMapController = controller;
-       print('✅ TASK DETAIL: OSM Map controller ready');
-     },
-     myLocationEnabled: false,
-     myLocationButtonEnabled: false,
-   );
- }
+	Widget _buildOSMMapPreview() {
+	  return OSMMapWidget(
+		initialCameraPosition: OSMCameraPosition(
+		  target: _selectedLocation?.toOpenStreetMap() ?? 
+				  ll.LatLng(widget.taskLocation.latitude, widget.taskLocation.longitude),
+		  zoom: 15.0,
+		),
+		markers: _osmMarkers,
+		onMapCreated: (controller) {
+		  _osmMapController = controller;
+		  print('✅ TASK DETAIL: OSM Map controller ready');
+		},
+		myLocationEnabled: false,
+		myLocationButtonEnabled: false,
+		// NEW: Smart centering parameters
+		centerOffsetPercentage: 1.7, // 170% offset to move marker up significantly
+		bottomSheetHeightPercentage: _bottomSheetHeight, // Current bottom sheet height
+	  );
+	}
+
+	//Method to update map center when bottom sheet height changes
+	void _updateMapCenterForBottomSheet() {
+	  if (_osmMapController != null && _currentMapProvider == MapProvider.openStreetMap) {
+		// Calculate new position for current bottom sheet height
+		final originalTarget = _selectedLocation?.toOpenStreetMap() ?? 
+							  ll.LatLng(widget.taskLocation.latitude, widget.taskLocation.longitude);
+		
+		// Use same offset calculation as OSMMapWidget
+		final zoomLevel = 15.0;
+		final latSpanPerScreen = 180.0 / (1 << zoomLevel.round());
+		final latOffset = latSpanPerScreen * 1.7 * _bottomSheetHeight; // Use same 1.7 as centerOffsetPercentage
+		
+		final adjustedTarget = ll.LatLng(
+		  originalTarget.latitude - latOffset, // Same minus sign as in OSMMapWidget
+		  originalTarget.longitude,
+		);
+		
+		// Move camera to new position
+		_osmMapController!.move(adjustedTarget, zoomLevel);
+		
+		print('🔄 CAMERA MOVED: To ${adjustedTarget.latitude.toStringAsFixed(6)} for ${(_bottomSheetHeight * 100).toStringAsFixed(1)}% bottom sheet');
+	  }
+	}
 
  @override
  Widget build(BuildContext context) {
@@ -1567,7 +1594,8 @@ class _TaskDetailScreenState extends State<TaskDetailScreen>
      },
      child: Scaffold(
        appBar: AppBar(
-         title: Text('Task Details (${_currentMapProvider.name})'),
+         //title: Text('Details (${_currentMapProvider.name})'),
+		 title: Text('Details'),
          backgroundColor: Colors.teal,
          foregroundColor: Colors.white,
          leading: IconButton(
@@ -1581,11 +1609,11 @@ class _TaskDetailScreenState extends State<TaskDetailScreen>
            },
          ),
          actions: [
-           IconButton(
-             icon: const Icon(Icons.ios_share),
-             onPressed: _exportTaskAsFile,
-             tooltip: 'Export as File',
-           ),
+           //IconButton(
+             //icon: const Icon(Icons.ios_share),
+             //onPressed: _exportTaskAsFile,
+             //tooltip: 'Export as File',
+           //),
            IconButton(
              icon: const Icon(Icons.share),
              onPressed: _exportTaskAsFile,
@@ -1637,12 +1665,15 @@ class _TaskDetailScreenState extends State<TaskDetailScreen>
              bottom: 0,
              height: availableHeight * _bottomSheetHeight,
              child: GestureDetector(
-               onPanUpdate: (details) {
-                 setState(() {
-                   _bottomSheetHeight -= details.delta.dy / availableHeight;
-                   _bottomSheetHeight = _bottomSheetHeight.clamp(_minBottomSheetHeight, _maxBottomSheetHeight);
-                 });
-               },
+				onPanUpdate: (details) {
+				  setState(() {
+					_bottomSheetHeight -= details.delta.dy / availableHeight;
+					_bottomSheetHeight = _bottomSheetHeight.clamp(_minBottomSheetHeight, _maxBottomSheetHeight);
+					
+					// NEW: Update map center when bottom sheet height changes
+					_updateMapCenterForBottomSheet();
+				  });
+				},
                child: Container(
                  decoration: BoxDecoration(
                    color: Theme.of(context).scaffoldBackgroundColor,
@@ -2244,20 +2275,20 @@ class _TaskDetailScreenWithStateState extends State<TaskDetailScreenWithState> {
    });
  }
 
- void _createOSMMarkers() {
-   if (_selectedLocation == null) return;
+	void _createOSMMarkers() {
+	  if (_selectedLocation == null) return;
 
-   final marker = OSMMarker(
-     markerId: 'task_location',
-     position: _selectedLocation!.toOpenStreetMap(),
-     title: widget.taskLocation.title,
-     child: OSMConverter.createDefaultMarker(color: _selectedColor),
-   );
+	  final marker = OSMMarker(
+		markerId: 'task_location',
+		position: _selectedLocation!.toOpenStreetMap(),
+		title: widget.taskLocation.title,
+		child: OSMConverter.createDefaultMarker(color: _selectedColor),
+	  );
 
-   setState(() {
-     _osmMarkers = {marker};
-   });
- }
+	  setState(() {
+		_osmMarkers = {marker};
+	  });
+	}
 
  void _restoreStateFromSavedData() {
    final savedState = widget.savedState;

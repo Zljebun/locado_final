@@ -61,6 +61,9 @@ class OSMMapWidget extends StatefulWidget {
   final bool myLocationButtonEnabled;
   final Function(ll.LatLng)? onTap;
   final Function(ll.LatLng)? onLongPress;
+  // NEW: Smart centering parameters
+  final double? centerOffsetPercentage;
+  final double? bottomSheetHeightPercentage;
 
   const OSMMapWidget({
     Key? key,
@@ -71,6 +74,9 @@ class OSMMapWidget extends StatefulWidget {
     this.myLocationButtonEnabled = false,
     this.onTap,
     this.onLongPress,
+    // NEW: Smart centering parameters
+    this.centerOffsetPercentage,
+    this.bottomSheetHeightPercentage,
   }) : super(key: key);
 
   @override
@@ -89,6 +95,71 @@ class _OSMMapWidgetState extends State<OSMMapWidget> {
     
     // 🚀 INSTANT UI: Show placeholder first, load map after delay
     _initializeMapWithDelay();
+  }
+
+  /// Calculate adjusted center position to account for bottom sheet
+  ll.LatLng _calculateAdjustedCenter() {
+    final originalTarget = widget.initialCameraPosition.target;
+    
+    // If no offset parameters provided, use original position
+    if (widget.centerOffsetPercentage == null || widget.bottomSheetHeightPercentage == null) {
+      print('⚠️ OSM SMART CENTERING: No offset parameters provided, using original position');
+      return originalTarget;
+    }
+    
+    // Check if MediaQuery is available
+    if (!mounted) {
+      print('⚠️ OSM SMART CENTERING: Widget not mounted, using original position');
+      return originalTarget;
+    }
+    
+    // Get screen context for calculations
+    final mediaQuery = MediaQuery.maybeOf(context);
+    if (mediaQuery == null) {
+      print('⚠️ OSM SMART CENTERING: MediaQuery not available, using original position');
+      return originalTarget;
+    }
+    
+    final screenHeight = mediaQuery.size.height;
+    final screenWidth = mediaQuery.size.width;
+    
+    // Calculate visible map area (area not covered by bottom sheet)
+    final bottomSheetHeight = widget.bottomSheetHeightPercentage!;
+    final visibleMapPercentage = 1.0 - bottomSheetHeight;
+    
+    // Calculate how much to offset the center northward (upward)
+    // We want the marker to be in the center of the VISIBLE map area
+    final offsetPercentage = widget.centerOffsetPercentage!;
+    
+    // Calculate latitude offset based on zoom level and screen dimensions
+    // At zoom level 15, roughly 1 degree latitude = 111 km
+    // Screen height roughly represents different lat/lng span based on zoom
+    final zoomLevel = widget.initialCameraPosition.zoom;
+    final latSpanPerScreen = _getLatitudeSpanForZoom(zoomLevel);
+    
+    // Calculate northward offset to center marker in visible area
+    final latOffset = latSpanPerScreen * offsetPercentage * bottomSheetHeight;
+    
+	final adjustedTarget = ll.LatLng(
+	  originalTarget.latitude - latOffset, 
+	  originalTarget.longitude,
+	);
+    
+    print('🎯 OSM SMART CENTERING:');
+    print('   Original: ${originalTarget.latitude.toStringAsFixed(6)}, ${originalTarget.longitude.toStringAsFixed(6)}');
+    print('   Adjusted: ${adjustedTarget.latitude.toStringAsFixed(6)}, ${adjustedTarget.longitude.toStringAsFixed(6)}');
+    print('   Offset: +${latOffset.toStringAsFixed(6)} lat');
+    print('   Bottom sheet height: ${(bottomSheetHeight * 100).toStringAsFixed(1)}%');
+    print('   Visible map area: ${(visibleMapPercentage * 100).toStringAsFixed(1)}%');
+    
+    return adjustedTarget;
+  }
+  
+  /// Get approximate latitude span for a given zoom level
+  double _getLatitudeSpanForZoom(double zoom) {
+    // Rough approximation: at zoom 1, world spans ~180 degrees
+    // Each zoom level halves the span
+    return 180.0 / (1 << zoom.round());
   }
 
   /// Initialize map with delay to prevent blocking UI
@@ -234,10 +305,13 @@ class _OSMMapWidgetState extends State<OSMMapWidget> {
 
   /// Build the actual OSM map
   Widget _buildActualMap() {
+    // SMART CENTERING: Use adjusted center instead of original
+    final adjustedCenter = _calculateAdjustedCenter();
+    
     return FlutterMap(
       mapController: _mapController,
       options: MapOptions(
-        initialCenter: widget.initialCameraPosition.target,
+        initialCenter: adjustedCenter, // ← Use adjusted center
         initialZoom: widget.initialCameraPosition.zoom,
         onMapReady: () {
           if (!_mapInitialized) {
@@ -296,6 +370,32 @@ class _OSMMapWidgetState extends State<OSMMapWidget> {
   // Method to get screen coordinate (compatible with Google Maps interface)
   Future<gmaps.ScreenCoordinate> getScreenCoordinate(ll.LatLng latLng) async {
     return gmaps.ScreenCoordinate(x: 0, y: 0);
+  }
+
+  // NEW: Method to dynamically update center when bottom sheet height changes
+  void updateCenterForBottomSheet(double newBottomSheetHeightPercentage) {
+    if (_mapInitialized && widget.centerOffsetPercentage != null) {
+      // Recalculate center with new bottom sheet height
+      final newTarget = ll.LatLng(
+        widget.initialCameraPosition.target.latitude,
+        widget.initialCameraPosition.target.longitude,
+      );
+      
+      // Calculate new offset
+      final zoomLevel = widget.initialCameraPosition.zoom;
+      final latSpanPerScreen = _getLatitudeSpanForZoom(zoomLevel);
+      final latOffset = latSpanPerScreen * widget.centerOffsetPercentage! * newBottomSheetHeightPercentage;
+      
+      final adjustedTarget = ll.LatLng(
+        newTarget.latitude + latOffset,
+        newTarget.longitude,
+      );
+      
+      // Smoothly animate to new position
+      _mapController.move(adjustedTarget, zoomLevel);
+      
+      print('🔄 OSM DYNAMIC UPDATE: Bottom sheet ${(newBottomSheetHeightPercentage * 100).toStringAsFixed(1)}%, new center: ${adjustedTarget.latitude.toStringAsFixed(6)}');
+    }
   }
 }
 
