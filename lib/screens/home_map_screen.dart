@@ -103,6 +103,13 @@ class _HomeMapScreenState extends State<HomeMapScreen>
   bool _isBatteryLoading = false;
   bool _showBatteryFAB = false;
 
+  // Map controls state variables 
+  bool _showCurrentLocationButton = true;
+  bool _isLocationLoading = false;
+  double _currentZoom = 15.0;
+  double _currentBearing = 0.0;
+  bool _isNorthLocked = false;
+
   @override
   void initState() {
     super.initState();
@@ -242,6 +249,12 @@ class _HomeMapScreenState extends State<HomeMapScreen>
   // Create basic OSM markers without complex rendering
   Future<void> _createBasicOSMMarkers(List<Location> locations, List<TaskLocation> taskLocations) async {
     Set<OSMMarker> newMarkers = {};
+	
+	// Keep current location marker if it exists
+	final currentLocationMarker = _osmMarkers.where((marker) => marker.markerId == 'current_location').firstOrNull;
+	if (currentLocationMarker != null) {
+	  newMarkers.add(currentLocationMarker);
+	}
 
     // Location markers - simple blue dots
     for (var location in locations) {
@@ -308,6 +321,337 @@ class _HomeMapScreenState extends State<HomeMapScreen>
       ),
     );
   }
+  
+	//Create blue dot for current location (Google Maps style)
+	Widget _createCurrentLocationMarker() {
+	  return Stack(
+		alignment: Alignment.center,
+		children: [
+		  // Pulsing outer circle
+		  Container(
+			width: 24,
+			height: 24,
+			decoration: BoxDecoration(
+			  color: Colors.blue.withOpacity(0.3),
+			  shape: BoxShape.circle,
+			),
+		  ),
+		  // Inner blue dot
+		  Container(
+			width: 16,
+			height: 16,
+			decoration: BoxDecoration(
+			  color: Colors.blue,
+			  shape: BoxShape.circle,
+			  border: Border.all(color: Colors.white, width: 3),
+			  boxShadow: [
+				BoxShadow(
+				  color: Colors.blue.withOpacity(0.4),
+				  blurRadius: 6,
+				  spreadRadius: 2,
+				),
+			  ],
+			),
+		  ),
+		],
+	  );
+	}
+	
+	//Go to user's current location
+	Future<void> _goToMyLocation() async {
+	  if (_isLocationLoading) return;
+
+	  setState(() {
+		_isLocationLoading = true;
+	  });
+
+	  try {
+		final position = await LocationService.getCurrentLocation();
+		
+		if (position != null) {
+		  final userLocation = ll.LatLng(position.latitude, position.longitude);
+		  _currentLocation = userLocation;
+
+		  if (_osmMapController != null) {
+			_osmMapController!.move(userLocation, 17.0);
+			setState(() {
+			  _currentZoom = 17.0;
+			});
+			
+			// Update current location marker
+			await _updateCurrentLocationMarker(userLocation);
+		  }
+
+		  ScaffoldMessenger.of(context).showSnackBar(
+			const SnackBar(
+			  content: Row(
+				children: [
+				  Icon(Icons.my_location, color: Colors.white),
+				  SizedBox(width: 8),
+				  Text('Centered on your location'),
+				],
+			  ),
+			  backgroundColor: Colors.blue,
+			  duration: Duration(seconds: 2),
+			),
+		  );
+		} else {
+		  ScaffoldMessenger.of(context).showSnackBar(
+			const SnackBar(
+			  content: Text('Unable to get current location'),
+			  backgroundColor: Colors.red,
+			),
+		  );
+		}
+	  } catch (e) {
+		ScaffoldMessenger.of(context).showSnackBar(
+		  SnackBar(
+			content: Text('Location error: $e'),
+			backgroundColor: Colors.red,
+		  ),
+		);
+	  }
+
+	  if (mounted) {
+		setState(() {
+		  _isLocationLoading = false;
+		});
+	  }
+	}
+	
+	//Update current location marker on map
+	Future<void> _updateCurrentLocationMarker(ll.LatLng location) async {
+	  Set<OSMMarker> updatedMarkers = Set.from(_osmMarkers);
+	  
+	  // Remove old current location marker
+	  updatedMarkers.removeWhere((marker) => marker.markerId == 'current_location');
+	  
+	  // Add new current location marker
+	  updatedMarkers.add(
+		OSMMarker(
+		  markerId: 'current_location',
+		  position: location,
+		  title: 'Your Location',
+		  child: _createCurrentLocationMarker(),
+		),
+	  );
+
+	  setState(() {
+		_osmMarkers = updatedMarkers;
+	  });
+	}	
+	
+	//Zoom in on map
+	void _zoomIn() {
+	  if (_osmMapController != null) {
+		final newZoom = (_currentZoom + 1).clamp(1.0, 18.0);
+		_osmMapController!.move(_osmMapController!.camera.center, newZoom);
+		setState(() {
+		  _currentZoom = newZoom;
+		});
+	  }
+	}
+
+	//Zoom out on map
+	void _zoomOut() {
+	  if (_osmMapController != null) {
+		final newZoom = (_currentZoom - 1).clamp(1.0, 18.0);
+		_osmMapController!.move(_osmMapController!.camera.center, newZoom);
+		setState(() {
+		  _currentZoom = newZoom;
+		});
+	  }
+	}
+
+	//Reset compass to north
+	void _resetToNorth() {
+	  if (_osmMapController != null) {
+		// Reset rotation/bearing to 0 (north)
+		_osmMapController!.rotate(0.0);
+		
+		setState(() {
+		  _currentBearing = 0.0;
+		  _isNorthLocked = true;
+		});
+
+		ScaffoldMessenger.of(context).showSnackBar(
+		  const SnackBar(
+			content: Row(
+			  children: [
+				Icon(Icons.navigation, color: Colors.white),
+				SizedBox(width: 8),
+				Text('Map oriented to North'),
+			  ],
+			),
+			backgroundColor: Colors.green,
+			duration: Duration(seconds: 2),
+		  ),
+		);
+
+		// Auto-unlock north after 3 seconds
+		Future.delayed(const Duration(seconds: 3), () {
+		  if (mounted) {
+			setState(() {
+			  _isNorthLocked = false;
+			});
+		  }
+		});
+	  }
+	}
+	
+	//My Location FAB
+	Widget _buildMyLocationFAB() {
+	  return FloatingActionButton(
+		onPressed: _isLocationLoading ? null : _goToMyLocation,
+		backgroundColor: Colors.white,
+		foregroundColor: Colors.blue,
+		elevation: 4,
+		heroTag: "my_location_fab",
+		child: _isLocationLoading
+			? const SizedBox(
+				width: 20,
+				height: 20,
+				child: CircularProgressIndicator(
+				  strokeWidth: 2,
+				  color: Colors.blue,
+				),
+			  )
+			: const Icon(Icons.my_location, size: 24),
+	  );
+	}
+
+	//Compass Control
+	Widget _buildCompassControl() {
+	  return Container(
+		width: 48,
+		height: 48,
+		decoration: BoxDecoration(
+		  color: Colors.white,
+		  shape: BoxShape.circle,
+		  boxShadow: [
+			BoxShadow(
+			  color: Colors.black.withOpacity(0.2),
+			  blurRadius: 4,
+			  offset: const Offset(0, 2),
+			),
+		  ],
+		),
+		child: Material(
+		  color: Colors.transparent,
+		  child: InkWell(
+			borderRadius: BorderRadius.circular(24),
+			onTap: _resetToNorth,
+			child: Transform.rotate(
+			  angle: _currentBearing * pi / 180,
+			  child: Icon(
+				Icons.navigation,
+				color: _isNorthLocked ? Colors.green : Colors.grey.shade600,
+				size: 24,
+			  ),
+			),
+		  ),
+		),
+	  );
+	}
+	
+	//Zoom Controls
+	Widget _buildZoomControls() {
+	  return Column(
+		mainAxisSize: MainAxisSize.min,
+		children: [
+		  // Zoom In
+		  Container(
+			width: 48,
+			height: 48,
+			decoration: BoxDecoration(
+			  color: Colors.white,
+			  borderRadius: const BorderRadius.only(
+				topLeft: Radius.circular(8),
+				topRight: Radius.circular(8),
+			  ),
+			  boxShadow: [
+				BoxShadow(
+				  color: Colors.black.withOpacity(0.2),
+				  blurRadius: 4,
+				  offset: const Offset(0, 2),
+				),
+			  ],
+			),
+			child: Material(
+			  color: Colors.transparent,
+			  child: InkWell(
+				borderRadius: const BorderRadius.only(
+				  topLeft: Radius.circular(8),
+				  topRight: Radius.circular(8),
+				),
+				onTap: _currentZoom >= 18.0 ? null : _zoomIn,
+				child: Icon(
+				  Icons.add,
+				  color: _currentZoom >= 18.0 ? Colors.grey.shade400 : Colors.grey.shade700,
+				  size: 24,
+				),
+			  ),
+			),
+		  ),
+
+		  // Divider
+		  Container(
+			width: 48,
+			height: 1,
+			color: Colors.grey.shade300,
+		  ),
+
+		  // Zoom Out
+		  Container(
+			width: 48,
+			height: 48,
+			decoration: BoxDecoration(
+			  color: Colors.white,
+			  borderRadius: const BorderRadius.only(
+				bottomLeft: Radius.circular(8),
+				bottomRight: Radius.circular(8),
+			  ),
+			  boxShadow: [
+				BoxShadow(
+				  color: Colors.black.withOpacity(0.2),
+				  blurRadius: 4,
+				  offset: const Offset(0, 2),
+				),
+			  ],
+			),
+			child: Material(
+			  color: Colors.transparent,
+			  child: InkWell(
+				borderRadius: const BorderRadius.only(
+				  bottomLeft: Radius.circular(8),
+				  bottomRight: Radius.circular(8),
+				),
+				onTap: _currentZoom <= 1.0 ? null : _zoomOut,
+				child: Icon(
+				  Icons.remove,
+				  color: _currentZoom <= 1.0 ? Colors.grey.shade400 : Colors.grey.shade700,
+				  size: 24,
+				),
+			  ),
+			),
+		  ),
+		],
+	  );
+	}
+	
+	//Start location tracking specifically for blue dot
+	Future<void> _startLocationTrackingForBlue() async {
+	  try {
+		final position = await LocationService.getCurrentLocation();
+		if (position != null) {
+		  final userLocation = ll.LatLng(position.latitude, position.longitude);
+		  _currentLocation = userLocation;
+		  await _updateCurrentLocationMarker(userLocation);
+		}
+	  } catch (e) {
+		print('Error getting initial location for blue dot: $e');
+	  }
+	}
 
   void _initializeBackgroundFeatures() {
     // OPTIMIZED PHASE 3: Reduce blocking operations and increase delays
@@ -1108,38 +1452,56 @@ class _HomeMapScreenState extends State<HomeMapScreen>
   }
 
   // SIMPLIFIED BUILD METHOD: OSM only, no dark mode, no animations
-  @override
-  Widget build(BuildContext context) {
-    // REMOVED: All dark mode debugging prints
-    print('🗺️ OSM-ONLY BUILD: Building OSM map');
+	@override
+	Widget build(BuildContext context) {
+	  print('🗺️ OSM-ONLY BUILD: Building OSM map with enhanced controls');
 
-    return Scaffold(
-      body: Stack(
-        children: [
-          // OSM MAP WIDGET ONLY
-          _buildOpenStreetMap(),
+	  return Scaffold(
+		body: Stack(
+		  children: [
+			// OSM MAP WIDGET
+			_buildOpenStreetMap(),
 
-          // REMOVED: Pulse animation completely - no AnimatedBuilder, no _nearbyTasks
+			// NEW: My Location FAB (top right)
+			Positioned(
+			  top: MediaQuery.of(context).padding.top - 15,
+			  right: 16,
+			  child: _buildMyLocationFAB(),
+			),
 
-          // Loading indicator
-          if (_isLoading)
-            const Center(child: CircularProgressIndicator()),					
-        ],
-      ),
+			// NEW: Compass Control (top right, below My Location)
+			Positioned(
+			  top: MediaQuery.of(context).padding.top + 50,
+			  right: 19,
+			  child: _buildCompassControl(),
+			),
 
-      // Battery Optimization FAB
-      floatingActionButton: _showBatteryFAB ? FloatingActionButton(
-        onPressed: _showBatteryOptimizationDialog,
-        backgroundColor: Colors.orange,
-        foregroundColor: Colors.white,
-        child: const Icon(Icons.battery_alert, size: 28),
-        elevation: 6,
-        heroTag: "battery_fab",
-      ) : null,
+			// NEW: Zoom Controls (bottom right)
+			Positioned(
+			  bottom: 16,
+			  right: 16,
+			  child: _buildZoomControls(),
+			),
 
-      floatingActionButtonLocation: FloatingActionButtonLocation.startTop,
-    );
-  }
+			// Loading indicator
+			if (_isLoading)
+			  const Center(child: CircularProgressIndicator()),
+		  ],
+		),
+
+		// Battery Optimization FAB (top left - unchanged)
+		floatingActionButton: _showBatteryFAB ? FloatingActionButton(
+		  onPressed: _showBatteryOptimizationDialog,
+		  backgroundColor: Colors.orange,
+		  foregroundColor: Colors.white,
+		  child: const Icon(Icons.battery_alert, size: 28),
+		  elevation: 6,
+		  heroTag: "battery_fab",
+		) : null,
+
+		floatingActionButtonLocation: FloatingActionButtonLocation.startTop,
+	  );
+	}
 
   // OPENSTREETMAP widget (now primary)
   Widget _buildOpenStreetMap() {
@@ -1155,11 +1517,15 @@ class _HomeMapScreenState extends State<HomeMapScreen>
         zoom: 15.0,
       ),
       markers: _osmMarkers,
-      onMapCreated: (controller) {
-        _osmMapController = controller;
-        _isMapReady = true;
-        print('✅ OSM-ONLY: OSM Map controller ready');
-      },
+		onMapCreated: (controller) {
+		  _osmMapController = controller;
+		  _isMapReady = true;
+		  _currentZoom = 15.0; // Initialize zoom level
+		  print('✅ OSM-ONLY: OSM Map controller ready');
+		  
+		  // Start tracking location and show blue dot
+		  _startLocationTrackingForBlue();
+		},
       myLocationEnabled: true,
       myLocationButtonEnabled: true,
 		onLongPress: (ll.LatLng position) async {
@@ -1325,6 +1691,9 @@ class _HomeMapScreenState extends State<HomeMapScreen>
       
       if (_osmMapController != null) {
         _osmMapController!.move(newLocation, 17.0);
+			setState(() {
+			  _currentZoom = 17.0;
+			});
         print('✅ OSM-ONLY: Focused on new task: ${task.title}');
       }
     } catch (e) {
@@ -1335,6 +1704,9 @@ class _HomeMapScreenState extends State<HomeMapScreen>
   void _centerCameraOnLocation(ll.LatLng location) {
     if (_osmMapController != null) {
       _osmMapController!.move(location, 17.0);
+		setState(() {
+		  _currentZoom = 17.0;
+		});
     }
   }
 
