@@ -3,6 +3,7 @@ import 'package:path/path.dart';
 import 'package:locado_final/models/location_model.dart';
 import 'package:locado_final/models/task_location.dart';
 import 'package:locado_final/models/calendar_event.dart';
+import 'package:locado_final/models/general_task.dart';
 
 class DatabaseHelper {
   static final DatabaseHelper instance = DatabaseHelper._init();
@@ -22,7 +23,7 @@ class DatabaseHelper {
     final path = join(dbPath, filePath);
     return openDatabase(
       path,
-      version: 3, // 🆕 POVEĆANA VERZIJA SA 2 NA 3
+      version: 5, // 🆕 DODANA general_tasks tabela
       onCreate: _createDB,
       onUpgrade: _onUpgrade,
     );
@@ -40,12 +41,12 @@ class DatabaseHelper {
       )
     ''');
 
-    // 🆕 AŽURIRANA task_locations tabela sa novim poljima
+    
     await db.execute('''
       CREATE TABLE task_locations(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        latitude REAL NOT NULL,
-        longitude REAL NOT NULL,
+		latitude REAL,
+		longitude REAL,
         title TEXT NOT NULL,
         taskItems TEXT NOT NULL,
         colorHex TEXT NOT NULL,
@@ -72,7 +73,22 @@ class DatabaseHelper {
         FOREIGN KEY (linkedTaskLocationId) REFERENCES task_locations (id) ON DELETE SET NULL
       )
     ''');
+	
+	// General tasks table (tasks without location)
+	await db.execute('''
+	  CREATE TABLE general_tasks(
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		title TEXT NOT NULL,
+		taskItems TEXT NOT NULL,
+		colorHex TEXT NOT NULL,
+		scheduledDateTime TEXT,
+		linkedCalendarEventId INTEGER,
+		FOREIGN KEY (linkedCalendarEventId) REFERENCES calendar_events (id) ON DELETE SET NULL
+	  )
+	''');
   }
+  
+
 
   // 🆕 AŽURIRANA MIGRATION LOGIKA
   Future _onUpgrade(Database db, int oldVersion, int newVersion) async {
@@ -117,6 +133,57 @@ class DatabaseHelper {
 
       print('✅ Database upgraded to version 3 - bidirectional task-calendar linking enabled');
     }
+	
+	
+	// 🆕 NOVA MIGRATION za verziju 4
+	if (oldVersion < 4) {
+	  try {
+		// Remove NOT NULL constraint by recreating table
+		await db.execute('ALTER TABLE task_locations RENAME TO task_locations_old');
+		
+		await db.execute('''
+		  CREATE TABLE task_locations(
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			latitude REAL,
+			longitude REAL,
+			title TEXT NOT NULL,
+			taskItems TEXT NOT NULL,
+			colorHex TEXT NOT NULL,
+			scheduledDateTime TEXT,
+			linkedCalendarEventId INTEGER,
+			FOREIGN KEY (linkedCalendarEventId) REFERENCES calendar_events (id) ON DELETE SET NULL
+		  )
+		''');
+		
+		await db.execute('INSERT INTO task_locations SELECT * FROM task_locations_old');
+		await db.execute('DROP TABLE task_locations_old');
+		
+		print('✅ Database upgraded to version 4 - latitude/longitude now nullable');
+	  } catch (e) {
+		print('⚠️ Error upgrading to version 4: $e');
+	  }
+	}
+	
+			// 🆕 NOVA MIGRATION za verziju 5 - general_tasks tabela
+		if (oldVersion < 5) {
+		  try {
+			// General tasks table (tasks without location)
+			await db.execute('''
+			  CREATE TABLE general_tasks(
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				title TEXT NOT NULL,
+				taskItems TEXT NOT NULL,
+				colorHex TEXT NOT NULL,
+				scheduledDateTime TEXT,
+				linkedCalendarEventId INTEGER,
+				FOREIGN KEY (linkedCalendarEventId) REFERENCES calendar_events (id) ON DELETE SET NULL
+			  )
+			''');
+			print('✅ Database upgraded to version 5 - general_tasks table added');
+		  } catch (e) {
+			print('⚠️ Error upgrading to version 5: $e');
+		  }
+		}
   }
 
   // ============ POSTOJEĆE LOCATION METODE ============
@@ -483,4 +550,137 @@ class DatabaseHelper {
     }
     print('============================');
   }
+  
+	// ============ GENERAL TASK METODE ============
+
+	/// Dodaje novi general task
+	Future<int> addGeneralTask(GeneralTask generalTask) async {
+	  final db = await instance.database;
+	  return db.insert('general_tasks', generalTask.toMap());
+	}
+
+	/// Vraća sve general tasks
+	Future<List<GeneralTask>> getAllGeneralTasks() async {
+	  final db = await instance.database;
+	  final result = await db.query(
+		'general_tasks',
+		orderBy: 'id DESC',
+	  );
+	  return result.map((map) => GeneralTask.fromMap(map)).toList();
+	}
+
+	/// Vraća general task po ID
+	Future<GeneralTask?> getGeneralTaskById(int id) async {
+	  final db = await instance.database;
+	  final List<Map<String, dynamic>> maps = await db.query(
+		'general_tasks',
+		where: 'id = ?',
+		whereArgs: [id],
+	  );
+
+	  if (maps.isNotEmpty) {
+		return GeneralTask.fromMap(maps.first);
+	  }
+	  return null;
+	}
+
+	/// Ažurira general task
+	Future<int> updateGeneralTask(GeneralTask generalTask) async {
+	  final db = await instance.database;
+	  return await db.update(
+		'general_tasks',
+		generalTask.toMap(),
+		where: 'id = ?',
+		whereArgs: [generalTask.id],
+	  );
+	}
+
+	/// Briše general task sa bidirekcionalnim cleanup
+	Future<int> deleteGeneralTask(int id) async {
+	  final db = await instance.database;
+
+	  // Get the task to check if it has linked calendar event
+	  final task = await getGeneralTaskById(id);
+
+	  if (task != null && task.linkedCalendarEventId != null) {
+		// Delete the linked calendar event
+		await deleteCalendarEvent(task.linkedCalendarEventId!);
+		print('✅ Deleted linked calendar event ${task.linkedCalendarEventId}');
+	  }
+
+	  // Delete the task
+	  return await db.delete(
+		'general_tasks',
+		where: 'id = ?',
+		whereArgs: [id],
+	  );
+	}
+
+	/// Vraća general tasks scheduled za određeni datum
+	Future<List<GeneralTask>> getGeneralTasksScheduledForDate(DateTime date) async {
+	  final db = await database;
+	  final startOfDay = DateTime(date.year, date.month, date.day);
+	  final endOfDay = startOfDay.add(Duration(days: 1)).subtract(Duration(milliseconds: 1));
+
+	  final List<Map<String, dynamic>> maps = await db.query(
+		'general_tasks',
+		where: 'scheduledDateTime >= ? AND scheduledDateTime <= ?',
+		whereArgs: [startOfDay.toIso8601String(), endOfDay.toIso8601String()],
+		orderBy: 'scheduledDateTime ASC',
+	  );
+
+	  return List.generate(maps.length, (i) => GeneralTask.fromMap(maps[i]));
+	}
+
+	/// Vraća nadolazeće scheduled general tasks
+	Future<List<GeneralTask>> getUpcomingScheduledGeneralTasks({int limit = 5}) async {
+	  final db = await database;
+	  final now = DateTime.now();
+
+	  final List<Map<String, dynamic>> maps = await db.query(
+		'general_tasks',
+		where: 'scheduledDateTime >= ?',
+		whereArgs: [now.toIso8601String()],
+		orderBy: 'scheduledDateTime ASC',
+		limit: limit,
+	  );
+
+	  return List.generate(maps.length, (i) => GeneralTask.fromMap(maps[i]));
+	}
+
+	/// Link general task sa calendar event
+	Future<void> linkGeneralTaskToCalendarEvent(int taskId, int calendarEventId) async {
+	  final db = await database;
+	  await db.update(
+		'general_tasks',
+		{'linkedCalendarEventId': calendarEventId},
+		where: 'id = ?',
+		whereArgs: [taskId],
+	  );
+	  print('✅ Linked general task $taskId to calendar event $calendarEventId');
+	}
+
+	/// Update scheduled time za general task
+	Future<void> updateGeneralTaskScheduledTime(int taskId, DateTime? scheduledDateTime) async {
+	  final db = await database;
+	  await db.update(
+		'general_tasks',
+		{'scheduledDateTime': scheduledDateTime?.toIso8601String()},
+		where: 'id = ?',
+		whereArgs: [taskId],
+	  );
+	  print('✅ Updated scheduled time for general task $taskId: ${scheduledDateTime?.toString() ?? 'removed'}');
+	}
+
+	/// Debug: Print all general tasks
+	Future<void> printAllGeneralTasks() async {
+	  final db = await database;
+	  final results = await db.query('general_tasks', orderBy: 'id ASC');
+	  print('=== GENERAL TASKS ===');
+	  for (final row in results) {
+		final task = GeneralTask.fromMap(row);
+		print('${task.id}: ${task.title} - Scheduled: ${task.scheduledDateTime?.toString() ?? 'None'}');
+	  }
+	  print('====================');
+	}
 }

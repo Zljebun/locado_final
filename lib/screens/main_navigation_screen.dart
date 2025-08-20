@@ -28,6 +28,8 @@ import 'package:device_info_plus/device_info_plus.dart';
 import 'dart:io';
 import '../services/app_bootstrap_service.dart';
 import '../services/task_location_cache.dart';
+import 'package:locado_final/models/general_task.dart';
+import 'package:locado_final/screens/general_task_detail_screen.dart';
 
 
 // Helper class for task distance calculations
@@ -101,6 +103,11 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
   Timer? _debounceTimer;
   FocusNode _searchFocusNode = FocusNode();
   static String get googleApiKey => dotenv.env['GOOGLE_MAPS_API_KEY_HTTP'] ?? '';
+  
+  int _tasksSubTabIndex = 0; // 0 = Located tasks, 1 = General tasks
+  
+  List<GeneralTask>? _cachedGeneralTasks;
+  bool _isLoadingGeneralTasks = true;
 
 	@override
 	void initState() {
@@ -198,6 +205,14 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
 		} else {
 		  print('ℹ️ CACHE: No cache available, will load from database');
 		}
+		
+		// Step 2b: INSTANT - Load general tasks from cache
+		print('🚀 CACHE: Loading general tasks...');
+		// For now, load directly from database since we just added this feature
+		final generalTasks = await DatabaseHelper.instance.getAllGeneralTasks();
+		_cachedGeneralTasks = generalTasks;
+
+		print('🚀 CACHE: Loaded ${generalTasks.length} general tasks');
 		
 		// Step 3: BACKGROUND - Refresh from database (don't block UI)
 		Future.delayed(const Duration(milliseconds: 100), () async {
@@ -384,8 +399,8 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
 		  final distance = _calculateDistance(
 			position.latitude,
 			position.longitude,
-			task.latitude,
-			task.longitude,
+			task.latitude!,
+			task.longitude!,
 		  );
 		  tasksWithDistance.add(TaskWithDistance(task, distance));
 		} catch (e) {
@@ -789,8 +804,8 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
 		   final distance = _calculateDistance(
 			 position.latitude,
 			 position.longitude,
-			 task.latitude,
-			 task.longitude,
+			 task.latitude!,
+			 task.longitude!,
 		   );
 		   
 		   tasksWithDistance.add(TaskWithDistance(task, distance));
@@ -945,60 +960,83 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
 	}
 
 	Widget _buildTaskListPage() {
-
-	  return Scaffold(
-		appBar: AppBar(
-		  title: Text(_isSelectionMode
-			  ? '${_selectedTaskIds.length} Selected'
-			  : 'All Tasks'
-		  ),
-		  backgroundColor: Colors.teal,
-		  foregroundColor: Colors.white,
-		  automaticallyImplyLeading: false,
-		  actions: [
-			if (_isSelectionMode) ...[
-			  if (_isDeleting)
-				const Padding(
-				  padding: EdgeInsets.all(16.0),
-				  child: SizedBox(
-					width: 20,
-					height: 20,
-					child: CircularProgressIndicator(
-					  strokeWidth: 2,
-					  color: Colors.white,
+	  return DefaultTabController(
+		length: 2,
+		child: Scaffold(
+		  appBar: AppBar(
+			title: Text(_isSelectionMode
+				? '${_selectedTaskIds.length} Selected'
+				: 'All Tasks'
+			),
+			backgroundColor: Colors.teal,
+			foregroundColor: Colors.white,
+			automaticallyImplyLeading: false,
+			bottom: _isSelectionMode ? null : TabBar(
+			  labelColor: Colors.white,
+			  unselectedLabelColor: Colors.white70,
+			  indicatorColor: Colors.white,
+			  tabs: const [
+				Tab(text: 'Located Tasks', icon: Icon(Icons.location_on, size: 18)),
+				Tab(text: 'General Tasks', icon: Icon(Icons.task_alt, size: 18)),
+			  ],
+			  onTap: (index) {
+				setState(() {
+				  _tasksSubTabIndex = index;
+				});
+			  },
+			),
+			actions: [
+			  if (_isSelectionMode) ...[
+				if (_isDeleting)
+				  const Padding(
+					padding: EdgeInsets.all(16.0),
+					child: SizedBox(
+					  width: 20,
+					  height: 20,
+					  child: CircularProgressIndicator(
+						strokeWidth: 2,
+						color: Colors.white,
+					  ),
 					),
+				  )
+				else
+				  IconButton(
+					icon: const Icon(Icons.delete),
+					onPressed: _selectedTaskIds.isEmpty ? null : _deleteSelectedTasks,
 				  ),
-				)
-			  else
 				IconButton(
-				  icon: const Icon(Icons.delete),
-				  onPressed: _selectedTaskIds.isEmpty ? null : _deleteSelectedTasks,
+				  icon: const Icon(Icons.close),
+				  onPressed: _toggleSelectionMode,
 				),
-			  IconButton(
-				icon: const Icon(Icons.close),
-				onPressed: _toggleSelectionMode,
-			  ),
-			] else ...[
-			  IconButton(
-				icon: const Icon(Icons.refresh),
-				onPressed: () {
-				  print('🔄 TASKS LIST: Manual refresh button pressed');
-				  _loadTaskData();
-				},
-				tooltip: 'Refresh Tasks',
-			  ),
-			  IconButton(
-				icon: const Icon(Icons.checklist),
-				onPressed: _toggleSelectionMode,
-			  ),
+			  ] else ...[
+				IconButton(
+				  icon: const Icon(Icons.refresh),
+				  onPressed: () {
+					print('📄 TASKS LIST: Manual refresh button pressed');
+					_loadTaskData();
+				  },
+				  tooltip: 'Refresh Tasks',
+				),
+				IconButton(
+				  icon: const Icon(Icons.checklist),
+				  onPressed: _toggleSelectionMode,
+				),
+			  ],
 			],
-		  ],
+		  ),
+		  body: _isSelectionMode 
+			  ? _buildTaskListBody() // Show all tasks in selection mode
+			  : TabBarView(
+				  children: [
+					_buildTaskListBody(filterType: 'located'),
+					_buildTaskListBody(filterType: 'general'),
+				  ],
+				),
 		),
-		body: _buildTaskListBody(),
 	  );
 	}
 
-  Widget _buildTaskListBody() {
+  Widget _buildTaskListBody({String? filterType}) {
     // Show loading indicator
     if (_isLoadingTasks) {
       return const Center(child: CircularProgressIndicator());
@@ -1043,6 +1081,31 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
     }
 
     final sortedTasksWithDistance = _cachedSortedTasks!;
+	
+	// Filter tasks based on type
+		List<TaskWithDistance> filteredTasks;
+		if (filterType == 'located') {
+		  filteredTasks = sortedTasksWithDistance.where((twd) => twd.task.hasLocation).toList();
+		} else if (filterType == 'general') {
+		  filteredTasks = sortedTasksWithDistance.where((twd) => !twd.task.hasLocation).toList();
+		} else {
+		  filteredTasks = sortedTasksWithDistance; // Show all (for selection mode)
+		}
+		
+		// Filter general tasks too
+		List<GeneralTask> filteredGeneralTasks = [];
+		if (_cachedGeneralTasks != null) {
+		  if (filterType == 'general') {
+			filteredGeneralTasks = _cachedGeneralTasks!;
+		  } else if (filterType == 'located') {
+			filteredGeneralTasks = []; // No general tasks in located tab
+		  } else {
+			filteredGeneralTasks = _cachedGeneralTasks!; // Show all in selection mode
+		  }
+		}
+
+		// Calculate total count
+		final totalTaskCount = filteredTasks.length + filteredGeneralTasks.length;
 
     return Column(
       children: [
@@ -1060,8 +1123,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
             children: [
               Icon(Icons.task_alt, color: Colors.teal.shade600, size: 20),
               const SizedBox(width: 8),
-              Text(
-                '${sortedTasksWithDistance.length} Task${sortedTasksWithDistance.length != 1 ? 's' : ''}',
+              Text('${totalTaskCount} Task${totalTaskCount != 1 ? 's' : ''}',
                 style: TextStyle(
                   fontSize: 16,
                   fontWeight: FontWeight.w600,
@@ -1069,18 +1131,18 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
                 ),
               ),
               const Spacer(),
-              if (_isSelectionMode && sortedTasksWithDistance.isNotEmpty)
+              if (_isSelectionMode && filteredTasks.isNotEmpty)
                 TextButton.icon(
-                  onPressed: () => _selectAllTasks(sortedTasksWithDistance),
+                  onPressed: () => _selectAllTasks(filteredTasks),
                   icon: Icon(
-                    _selectedTaskIds.length == sortedTasksWithDistance.length
+                    _selectedTaskIds.length == filteredTasks.length
                         ? Icons.deselect
                         : Icons.select_all,
                     size: 16,
                     color: Colors.teal.shade600,
                   ),
                   label: Text(
-                    _selectedTaskIds.length == sortedTasksWithDistance.length
+                    _selectedTaskIds.length == filteredTasks.length
                         ? 'Deselect All'
                         : 'Select All',
                     style: TextStyle(
@@ -1122,166 +1184,320 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
           ),
 
         // Task list
-        Expanded(
-          child: ListView.separated(
-            padding: const EdgeInsets.all(16),
-            itemCount: sortedTasksWithDistance.length,
-            separatorBuilder: (context, index) => const SizedBox(height: 12),
-            itemBuilder: (context, index) {
-              final taskWithDistance = sortedTasksWithDistance[index];
-              final task = taskWithDistance.task;
-              final color = Color(int.parse(task.colorHex.replaceFirst('#', '0xff')));
-              final isSelected = task.id != null && _selectedTaskIds.contains(task.id!);
+		Expanded(
+		  child: ListView.separated(
+			padding: const EdgeInsets.all(16),
+			itemCount: totalTaskCount,
+			separatorBuilder: (context, index) => const SizedBox(height: 12),
+			itemBuilder: (context, index) {
+			  // Determine if this is a TaskLocation or GeneralTask
+			  if (index < filteredTasks.length) {
+				// This is a TaskLocation
+				final taskWithDistance = filteredTasks[index];
+				final task = taskWithDistance.task;
+				final color = Color(int.parse(task.colorHex.replaceFirst('#', '0xff')));
+				final isSelected = task.id != null && _selectedTaskIds.contains(task.id!);
 
-              return Container(
-                decoration: BoxDecoration(
-                  color: isSelected
-                      ? Colors.teal.shade50
-                      : Theme.of(context).cardColor,
-                  borderRadius: BorderRadius.circular(12),
-                  border: isSelected
-                      ? Border.all(color: Colors.teal, width: 2)
-                      : null,
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.grey.shade200,
-                      blurRadius: 4,
-                      offset: const Offset(0, 2),
-                    ),
-                  ],
-                ),
-                child: Material(
-                  color: Colors.transparent,
-                  child: InkWell(
-                    borderRadius: BorderRadius.circular(12),
-                    onTap: () {
-                      if (_isSelectionMode) {
-                        if (task.id != null) {
-                          _toggleTaskSelection(task.id!);
-                        }
-                      } else {
-                        _openTaskDetail(task);
-                      }
-                    },
-                    onLongPress: () {
-                      if (!_isSelectionMode) {
-                        _deleteTask(task);
-                      }
-                    },
-                    child: Padding(
-                      padding: const EdgeInsets.all(16),
-                      child: Row(
-                        children: [
-                          // Checkbox (only show in selection mode)
-                          if (_isSelectionMode) ...[
-                            Checkbox(
-                              value: isSelected,
-                              onChanged: (value) {
-                                if (task.id != null) {
-                                  _toggleTaskSelection(task.id!);
-                                }
-                              },
-                              activeColor: Colors.teal,
-                            ),
-                            const SizedBox(width: 8),
-                          ],
+				return Container(
+				  decoration: BoxDecoration(
+					color: isSelected
+						? Colors.teal.shade50
+						: Theme.of(context).cardColor,
+					borderRadius: BorderRadius.circular(12),
+					border: isSelected
+						? Border.all(color: Colors.teal, width: 2)
+						: null,
+					boxShadow: [
+					  BoxShadow(
+						color: Colors.grey.shade200,
+						blurRadius: 4,
+						offset: const Offset(0, 2),
+					  ),
+					],
+				  ),
+				  child: Material(
+					color: Colors.transparent,
+					child: InkWell(
+					  borderRadius: BorderRadius.circular(12),
+					  onTap: () {
+						if (_isSelectionMode) {
+						  if (task.id != null) {
+							_toggleTaskSelection(task.id!);
+						  }
+						} else {
+						  _openTaskDetail(task);
+						}
+					  },
+					  onLongPress: () {
+						if (!_isSelectionMode) {
+						  _deleteTask(task);
+						}
+					  },
+					  child: Padding(
+						padding: const EdgeInsets.all(16),
+						child: Row(
+						  children: [
+							// Checkbox (only show in selection mode)
+							if (_isSelectionMode) ...[
+							  Checkbox(
+								value: isSelected,
+								onChanged: (value) {
+								  if (task.id != null) {
+									_toggleTaskSelection(task.id!);
+								  }
+								},
+								activeColor: Colors.teal,
+							  ),
+							  const SizedBox(width: 8),
+							],
 
-                          // Color circle - focus on map when tapped (not in selection mode)
-                          GestureDetector(
-                            onTap: _isSelectionMode ? null : () => _focusOnTask(task),
-                            child: Container(
-                              width: 40,
-                              height: 40,
-                              decoration: BoxDecoration(
-                                color: color,
-                                shape: BoxShape.circle,
-                                boxShadow: [
-                                  BoxShadow(
-                                    color: color.withOpacity(0.3),
-                                    blurRadius: 4,
-                                    offset: const Offset(0, 2),
-                                  ),
-                                ],
-                              ),
-                              child: const Icon(
-                                Icons.location_on,
-                                color: Colors.white,
-                                size: 20,
-                              ),
-                            ),
-                          ),
+							// Color circle - focus on map when tapped (not in selection mode)
+							GestureDetector(
+							  onTap: _isSelectionMode ? null : () => _focusOnTask(task),
+							  child: Container(
+								width: 40,
+								height: 40,
+								decoration: BoxDecoration(
+								  color: color,
+								  shape: BoxShape.circle,
+								  boxShadow: [
+									BoxShadow(
+									  color: color.withOpacity(0.3),
+									  blurRadius: 4,
+									  offset: const Offset(0, 2),
+									),
+								  ],
+								),
+								child: const Icon(
+								  Icons.location_on,
+								  color: Colors.white,
+								  size: 20,
+								),
+							  ),
+							),
 
-                          const SizedBox(width: 16),
+							const SizedBox(width: 16),
 
-                          // Task info
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  task.title,
-                                  style: const TextStyle(
-                                    fontWeight: FontWeight.w600,
-                                    fontSize: 16,
-                                  ),
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                                const SizedBox(height: 4),
-                                Row(
-                                  children: [
-                                    Icon(
-                                      Icons.checklist,
-                                      size: 14,
-                                      color: Colors.grey.shade500,
-                                    ),
-                                    const SizedBox(width: 4),
-                                    Text(
-                                      '${task.taskItems.length} items',
-                                      style: TextStyle(
-                                        color: Colors.grey.shade600,
-                                        fontSize: 14,
-                                      ),
-                                    ),
+							// Task info
+							Expanded(
+							  child: Column(
+								crossAxisAlignment: CrossAxisAlignment.start,
+								children: [
+								  Text(
+									task.title,
+									style: const TextStyle(
+									  fontWeight: FontWeight.w600,
+									  fontSize: 16,
+									),
+									maxLines: 1,
+									overflow: TextOverflow.ellipsis,
+								  ),
+								  const SizedBox(height: 4),
+								  Row(
+									children: [
+									  Icon(
+										Icons.checklist,
+										size: 14,
+										color: Colors.grey.shade500,
+									  ),
+									  const SizedBox(width: 4),
+									  Text(
+										'${task.taskItems.length} items',
+										style: TextStyle(
+										  color: Colors.grey.shade600,
+										  fontSize: 14,
+										),
+									  ),
 
-                                    // Show distance
-                                    const SizedBox(width: 16),
-                                    Icon(
-                                      Icons.location_on,
-                                      size: 14,
-                                      color: Colors.grey.shade500,
-                                    ),
-                                    const SizedBox(width: 4),
-                                    Text(
-                                      _formatDistance(taskWithDistance.distance),
-                                      style: TextStyle(
-                                        color: Colors.grey.shade600,
-                                        fontSize: 14,
-                                        fontWeight: FontWeight.w500,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ],
-                            ),
-                          ),
+									  // Show distance
+									  const SizedBox(width: 16),
+									  Icon(
+										Icons.location_on,
+										size: 14,
+										color: Colors.grey.shade500,
+									  ),
+									  const SizedBox(width: 4),
+									  Text(
+										_formatDistance(taskWithDistance.distance),
+										style: TextStyle(
+										  color: Colors.grey.shade600,
+										  fontSize: 14,
+										  fontWeight: FontWeight.w500,
+										),
+									  ),
+									],
+								  ),
+								],
+							  ),
+							),
 
-                          // Arrow icon (only show when not in selection mode)
-                          if (!_isSelectionMode)
-                            Icon(
-                              Icons.arrow_forward_ios,
-                              color: Colors.grey.shade400,
-                              size: 16,
-                            ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-              );
-            },
-          ),
-        ),
+							// Arrow icon (only show when not in selection mode)
+							if (!_isSelectionMode)
+							  Icon(
+								Icons.arrow_forward_ios,
+								color: Colors.grey.shade400,
+								size: 16,
+							  ),
+						  ],
+						),
+					  ),
+					),
+				  ),
+				);
+			  } else {
+				// This is a GeneralTask
+				final generalTaskIndex = index - filteredTasks.length;
+				final generalTask = filteredGeneralTasks[generalTaskIndex];
+				final color = Color(int.parse(generalTask.colorHex.replaceFirst('#', '0xff')));
+				final isSelected = generalTask.id != null && _selectedTaskIds.contains(generalTask.id!);
+
+				return Container(
+				  decoration: BoxDecoration(
+					color: isSelected
+						? Colors.teal.shade50
+						: Theme.of(context).cardColor,
+					borderRadius: BorderRadius.circular(12),
+					border: isSelected
+						? Border.all(color: Colors.teal, width: 2)
+						: null,
+					boxShadow: [
+					  BoxShadow(
+						color: Colors.grey.shade200,
+						blurRadius: 4,
+						offset: const Offset(0, 2),
+					  ),
+					],
+				  ),
+				  child: Material(
+					color: Colors.transparent,
+					child: InkWell(
+					  borderRadius: BorderRadius.circular(12),
+					  onTap: () {
+						if (_isSelectionMode) {
+						  if (generalTask.id != null) {
+							_toggleTaskSelection(generalTask.id!);
+						  }
+						} else {
+						  _openGeneralTaskDetail(generalTask);
+						}
+					  },
+					  onLongPress: () {
+						if (!_isSelectionMode) {
+						  _deleteGeneralTask(generalTask);
+						}
+					  },
+					  child: Padding(
+						padding: const EdgeInsets.all(16),
+						child: Row(
+						  children: [
+							// Checkbox (only show in selection mode)
+							if (_isSelectionMode) ...[
+							  Checkbox(
+								value: isSelected,
+								onChanged: (value) {
+								  if (generalTask.id != null) {
+									_toggleTaskSelection(generalTask.id!);
+								  }
+								},
+								activeColor: Colors.teal,
+							  ),
+							  const SizedBox(width: 8),
+							],
+
+							// Color circle - no location icon for general tasks
+							Container(
+							  width: 40,
+							  height: 40,
+							  decoration: BoxDecoration(
+								color: color,
+								shape: BoxShape.circle,
+								boxShadow: [
+								  BoxShadow(
+									color: color.withOpacity(0.3),
+									blurRadius: 4,
+									offset: const Offset(0, 2),
+								  ),
+								],
+							  ),
+							  child: const Icon(
+								Icons.task_alt,
+								color: Colors.white,
+								size: 20,
+							  ),
+							),
+
+							const SizedBox(width: 16),
+
+							// Task info
+							Expanded(
+							  child: Column(
+								crossAxisAlignment: CrossAxisAlignment.start,
+								children: [
+								  Text(
+									generalTask.title,
+									style: const TextStyle(
+									  fontWeight: FontWeight.w600,
+									  fontSize: 16,
+									),
+									maxLines: 1,
+									overflow: TextOverflow.ellipsis,
+								  ),
+								  const SizedBox(height: 4),
+								  Row(
+									children: [
+									  Icon(
+										Icons.checklist,
+										size: 14,
+										color: Colors.grey.shade500,
+									  ),
+									  const SizedBox(width: 4),
+									  Text(
+										'${generalTask.taskItems.length} items',
+										style: TextStyle(
+										  color: Colors.grey.shade600,
+										  fontSize: 14,
+										),
+									  ),
+
+									  // Show "No location" instead of distance
+									  const SizedBox(width: 16),
+									  Icon(
+										Icons.location_off,
+										size: 14,
+										color: Colors.grey.shade500,
+									  ),
+									  const SizedBox(width: 4),
+									  Text(
+										'No location',
+										style: TextStyle(
+										  color: Colors.grey.shade600,
+										  fontSize: 14,
+										  fontWeight: FontWeight.w500,
+										),
+									  ),
+									],
+								  ),
+								],
+							  ),
+							),
+
+							// Arrow icon (only show when not in selection mode)
+							if (!_isSelectionMode)
+							  Icon(
+								Icons.arrow_forward_ios,
+								color: Colors.grey.shade400,
+								size: 16,
+							  ),
+						  ],
+						),
+					  ),
+					),
+				  ),
+				);
+			  }
+			},
+		  ),
+		),
       ],
     );
   }
@@ -1680,25 +1896,21 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
 
       // Floating Action Button (only show on map tab)
 		floatingActionButton: _currentIndex == 0 ? FloatingActionButton(
-		  onPressed: () async {
-			print('🔄 FAB: FloatingActionButton pressed, opening TaskInputScreen...');
-			
-			final userPosition = LatLng(48.2082, 16.3738); // Default Vienna coordinates
-			final result = await Navigator.push(
-			  context,
-			  MaterialPageRoute(
-				builder: (ctx) => TaskInputScreen(location: userPosition),
-			  ),
-			);
+		onPressed: () async {
+		  print('📄 FAB: FloatingActionButton pressed, opening TaskInputScreen directly...');
+		  
+		  final result = await Navigator.push(
+			context,
+			MaterialPageRoute(
+			  builder: (ctx) => const TaskInputScreen(), // No location parameter - let user choose
+			),
+		  );
 
-			print('🔄 FAB: TaskInputScreen returned with result: $result');
-
-			if (result == true) {
-			  print('🔄 FAB: Result is true, reloading task data...');
-			  // Reload task data after new task is added (will use cache first)
-			  await _loadTaskData();
-			}
-		  },
+		  if (result == true) {
+			print('📄 FAB: Task created, reloading data...');
+			await _loadTaskData();
+		  }
+		},
 		  backgroundColor: Colors.teal,
 		  foregroundColor: Colors.white,
 		  child: const Icon(Icons.add),
@@ -2377,5 +2589,53 @@ Future<void> _selectMapProvider(String provider) async {
 		  ),
 		);
 	  }
+	}
+	
+	void _openGeneralTaskDetail(GeneralTask generalTask) async {
+	  print('📄 OPEN GENERAL TASK DETAIL: Opening task: ${generalTask.title}');
+	  
+	  final result = await Navigator.push(
+		context,
+		MaterialPageRoute(
+		  builder: (ctx) => GeneralTaskDetailScreen(generalTask: generalTask),
+		),
+	  );
+
+	  if (result == true) {
+		await _loadTaskData();
+	  }
+	}
+
+	void _deleteGeneralTask(GeneralTask generalTask) {
+	  HapticFeedback.mediumImpact();
+
+	  showDialog(
+		context: context,
+		builder: (context) => AlertDialog(
+		  title: const Text('Delete General Task'),
+		  content: Text('Are you sure you want to delete "${generalTask.title}"?'),
+		  actions: [
+			TextButton(
+			  onPressed: () => Navigator.pop(context),
+			  child: const Text('Cancel'),
+			),
+			ElevatedButton(
+			  onPressed: () async {
+				Navigator.pop(context);
+				await DatabaseHelper.instance.deleteGeneralTask(generalTask.id!);
+				await _loadTaskData();
+				ScaffoldMessenger.of(context).showSnackBar(
+				  SnackBar(
+					content: Text('General task "${generalTask.title}" deleted'),
+					backgroundColor: Colors.red,
+				  ),
+				);
+			  },
+			  style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+			  child: const Text('Delete', style: TextStyle(color: Colors.white)),
+			),
+		  ],
+		),
+	  );
 	}
 }

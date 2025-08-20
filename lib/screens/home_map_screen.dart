@@ -109,6 +109,8 @@ class _HomeMapScreenState extends State<HomeMapScreen>
   double _currentZoom = 15.0;
   double _currentBearing = 0.0;
   bool _isNorthLocked = false;
+  
+  bool _isFabMenuOpen = false;
 
   @override
   void initState() {
@@ -270,12 +272,14 @@ class _HomeMapScreenState extends State<HomeMapScreen>
 
     // Task markers - simple colored dots (no custom Canvas rendering)
     for (var task in taskLocations) {
+	 // Skip tasks without location
+      if (!task.hasLocation) continue;
       final color = Color(int.parse(task.colorHex.replaceFirst('#', '0xff')));
       
       newMarkers.add(
         OSMMarker(
           markerId: 'task_${task.id}',
-          position: ll.LatLng(task.latitude, task.longitude),
+          position: ll.LatLng(task.latitude!, task.longitude!),
           title: task.title,
           child: _createSimpleMarker(color, Icons.location_on),
           onTap: () => _handleTaskTap(task),
@@ -1638,19 +1642,16 @@ class _HomeMapScreenState extends State<HomeMapScreen>
     }
 
     // Task markers with colors
-    for (var task in taskLocations) {
-      final color = Color(int.parse(task.colorHex.replaceFirst('#', '0xff')));
-      
-      newMarkers.add(
-        OSMMarker(
-          markerId: 'task_${task.id}',
-          position: ll.LatLng(task.latitude, task.longitude),
-          title: task.title,
-          child: _createStyledMarker(color, Icons.location_on, isLarge: true),
-          onTap: () => _handleTaskTap(task),
-        ),
-      );
-    }
+	for (var location in locations) {
+	  newMarkers.add(
+		OSMMarker(
+		  markerId: 'location_${location.id}',
+		  position: ll.LatLng(location.latitude!, location.longitude!), 
+		  title: location.description ?? 'No Description',
+		  child: _createStyledMarker(Colors.blue, Icons.place, isLarge: false),
+		),
+	  );
+	}
 
     setState(() {
       _osmMarkers = newMarkers;
@@ -1687,7 +1688,8 @@ class _HomeMapScreenState extends State<HomeMapScreen>
 
   Future<void> _focusOnNewTask(TaskLocation task) async {
     try {
-      final newLocation = ll.LatLng(task.latitude, task.longitude);
+      if (!task.hasLocation) return;
+		final newLocation = ll.LatLng(task.latitude!, task.longitude!);
       
       if (_osmMapController != null) {
         _osmMapController!.move(newLocation, 17.0);
@@ -1877,7 +1879,8 @@ class _HomeMapScreenState extends State<HomeMapScreen>
   Future<void> _focusOnUpdatedTask(int taskId) async {
     try {
       final updatedTask = _savedLocations.firstWhere((task) => task.id == taskId);
-      final location = ll.LatLng(updatedTask.latitude, updatedTask.longitude);
+      if (!updatedTask.hasLocation) return;
+		final location = ll.LatLng(updatedTask.latitude!, updatedTask.longitude!);
 
       if (_osmMapController != null) {
         _osmMapController!.move(location, 17.0);
@@ -1928,8 +1931,8 @@ class _HomeMapScreenState extends State<HomeMapScreen>
       final distance = _calculateDistance(
         currentPosition.latitude,
         currentPosition.longitude,
-        task.latitude,
-        task.longitude,
+        task.latitude!,
+        task.longitude!,		
       );
 
       tasksWithDistance.add(TaskWithDistance(task, distance));
@@ -1985,8 +1988,8 @@ class _HomeMapScreenState extends State<HomeMapScreen>
         final distance = _calculateDistance(
           currentPosition.latitude,
           currentPosition.longitude,
-          task.latitude,
-          task.longitude,
+         task.latitude!,
+		 task.longitude!,
         );
 
         tasksWithDistance.add(TaskWithDistance(task, distance));
@@ -2142,7 +2145,8 @@ class _HomeMapScreenState extends State<HomeMapScreen>
     print('🗺️ MAP FOCUS DEBUG: Task coordinates: ${task.latitude}, ${task.longitude}');
 
     try {
-      final location = ll.LatLng(task.latitude, task.longitude);
+      if (!task.hasLocation) return;
+       final location = ll.LatLng(task.latitude!, task.longitude!);
       
       if (_osmMapController != null && _isMapReady) {
         _isManuallyFocusing = true;

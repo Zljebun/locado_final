@@ -21,6 +21,7 @@ import '../widgets/osm_map_widget.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'dart:io';
 
+
 // Enum for map provider selection
 enum MapProvider { googleMaps, openStreetMap }
 
@@ -94,6 +95,10 @@ class _TaskDetailScreenState extends State<TaskDetailScreen>
   double _bottomSheetHeight = 0.6; // 60% of screen initially
   final double _minBottomSheetHeight = 0.3; // 30% minimum
   final double _maxBottomSheetHeight = 0.85; // 85% maximum
+  
+  // Map interaction state
+  bool _isLocationSelectionMode = false;
+  bool _mapExpanded = false;
 
   @override
   void initState() {
@@ -114,7 +119,9 @@ class _TaskDetailScreenState extends State<TaskDetailScreen>
     
     _loadMapProviderSetting();
     _titleController = TextEditingController(text: widget.taskLocation.title);
-    _selectedLocation = UniversalLatLng(widget.taskLocation.latitude, widget.taskLocation.longitude);
+    _selectedLocation = widget.taskLocation.hasLocation 
+		? UniversalLatLng(widget.taskLocation.latitude!, widget.taskLocation.longitude!)
+		: null;
     _selectedColor = _taskColor;
 
     // Initialize scheduling data
@@ -1463,6 +1470,38 @@ class _TaskDetailScreenState extends State<TaskDetailScreen>
 
  // HYBRID MAP PREVIEW - choose correct widget based on provider
 	Widget _buildMapPreview() {
+	  // Don't show map if task has no location
+	  if (!widget.taskLocation.hasLocation) {
+		return Container(
+		  color: Colors.grey.shade100,
+		  child: Center(
+			child: Column(
+			  mainAxisAlignment: MainAxisAlignment.center,
+			  children: [
+				Icon(Icons.location_off, size: 48, color: Colors.grey.shade400),
+				const SizedBox(height: 8),
+				Text(
+				  'No Location Set',
+				  style: TextStyle(
+					fontSize: 16,
+					color: Colors.grey.shade600,
+					fontWeight: FontWeight.w500,
+				  ),
+				),
+				const SizedBox(height: 4),
+				Text(
+				  'This task is not tied to a specific location',
+				  style: TextStyle(
+					fontSize: 12,
+					color: Colors.grey.shade500,
+				  ),
+				),
+			  ],
+			),
+		  ),
+		);
+	  }
+
 	  if (_currentMapProvider == MapProvider.googleMaps) {
 		return _buildGoogleMapPreview();
 	  } else {
@@ -1478,7 +1517,7 @@ class _TaskDetailScreenState extends State<TaskDetailScreen>
        print('✅ TASK DETAIL: Google Map controller ready');
      },
      initialCameraPosition: gmaps.CameraPosition(
-       target: _selectedLocation?.toGoogleMaps() ?? gmaps.LatLng(widget.taskLocation.latitude, widget.taskLocation.longitude),
+       target: _selectedLocation?.toGoogleMaps() ?? gmaps.LatLng(widget.taskLocation.latitude ?? 48.2082, widget.taskLocation.longitude ?? 16.3738),
        zoom: 15,
      ),
      markers: _googleMarkers,
@@ -1500,7 +1539,7 @@ class _TaskDetailScreenState extends State<TaskDetailScreen>
 	  return OSMMapWidget(
 		initialCameraPosition: OSMCameraPosition(
 		  target: _selectedLocation?.toOpenStreetMap() ?? 
-				  ll.LatLng(widget.taskLocation.latitude, widget.taskLocation.longitude),
+				  ll.LatLng(widget.taskLocation.latitude ?? 48.2082, widget.taskLocation.longitude ?? 16.3738),
 		  zoom: 15.0,
 		),
 		markers: _osmMarkers,
@@ -1508,6 +1547,7 @@ class _TaskDetailScreenState extends State<TaskDetailScreen>
 		  _osmMapController = controller;
 		  print('✅ TASK DETAIL: OSM Map controller ready');
 		},
+		onLongPress: _isLocationSelectionMode ? _onOSMMapLongPress : null,
 		myLocationEnabled: false,
 		myLocationButtonEnabled: false,
 		// NEW: Smart centering parameters
@@ -1521,7 +1561,7 @@ class _TaskDetailScreenState extends State<TaskDetailScreen>
 	  if (_osmMapController != null && _currentMapProvider == MapProvider.openStreetMap) {
 		// Calculate new position for current bottom sheet height
 		final originalTarget = _selectedLocation?.toOpenStreetMap() ?? 
-							  ll.LatLng(widget.taskLocation.latitude, widget.taskLocation.longitude);
+							  ll.LatLng(widget.taskLocation.latitude ?? 48.2082, widget.taskLocation.longitude ?? 16.3738);
 		
 		// Use same offset calculation as OSMMapWidget
 		final zoomLevel = 15.0;
@@ -1640,20 +1680,21 @@ class _TaskDetailScreenState extends State<TaskDetailScreen>
                children: [
                  _buildMapPreview(),
                  
-                 // FAB - positioned above bottom sheet
-                 Positioned(
-                   bottom: availableHeight * _bottomSheetHeight + 20,
-                   right: 16,
-                   child: FloatingActionButton(
-                     onPressed: _navigateToTask,
-                     backgroundColor: Colors.blue,
-                     foregroundColor: Colors.white,
-                     mini: true,
-                     heroTag: "navigation_fab",
-                     child: const Icon(Icons.navigation, size: 20),
-                     tooltip: 'Navigate to Task',
-                   ),
-                 ),
+				// FAB - positioned above bottom sheet (only show if task has location)
+				if (widget.taskLocation.hasLocation)
+				  Positioned(
+					bottom: availableHeight * _bottomSheetHeight + 20,
+					right: 16,
+					child: FloatingActionButton(
+					  onPressed: _navigateToTask,
+					  backgroundColor: Colors.blue,
+					  foregroundColor: Colors.white,
+					  mini: true,
+					  heroTag: "navigation_fab",
+					  child: const Icon(Icons.navigation, size: 20),
+					  tooltip: 'Navigate to Task',
+					),
+				  ),
                ],
              ),
            ),
@@ -1755,7 +1796,7 @@ class _TaskDetailScreenState extends State<TaskDetailScreen>
 
                                          // Location button
                                          IconButton(
-                                           onPressed: _selectLocation,
+                                           onPressed: _toggleLocationSelectionMode,
                                            icon: const Icon(Icons.location_on, color: Colors.blue),
                                            tooltip: 'Change Location',
                                          ),
@@ -1925,6 +1966,65 @@ class _TaskDetailScreenState extends State<TaskDetailScreen>
      ),
    );
  }
+ 
+	 void _toggleLocationSelectionMode() {
+	  setState(() {
+		_isLocationSelectionMode = !_isLocationSelectionMode;
+		_mapExpanded = _isLocationSelectionMode;
+		
+		if (_isLocationSelectionMode) {
+		  // Hide current marker temporarily
+		  _clearMapMarkers();
+		} else {
+		  // Restore markers
+		  _updateMapMarkers();
+		}
+	  });
+	}
+
+	void _onOSMMapLongPress(ll.LatLng tappedPoint) {
+	  _selectLocationFromMap(tappedPoint.latitude, tappedPoint.longitude);
+	}
+
+	void _selectLocationFromMap(double latitude, double longitude) async {
+	  setState(() {
+		_selectedLocation = UniversalLatLng(latitude, longitude);
+		_isLocationSelectionMode = false;
+		_mapExpanded = false;
+	  });
+	  
+	  // Update task in database
+	  await DatabaseHelper.instance.updateTaskLocation(
+		widget.taskLocation.copyWith(
+		  latitude: latitude,
+		  longitude: longitude,
+		),
+	  );
+	  
+	  _updateMapMarkers();
+	  
+	  ScaffoldMessenger.of(context).showSnackBar(
+		SnackBar(
+		  content: Text('Task location updated'),
+		  backgroundColor: Colors.green,
+		),
+	  );
+	}
+	
+	void _clearMapMarkers() {
+	  setState(() {
+		_googleMarkers = {};
+		_osmMarkers = {};
+	  });
+	}
+
+	void _updateMapMarkers() {
+	  _createMapMarkers();
+	}
+
+	void _onMapLongPress(gmaps.LatLng tappedPoint) {
+	  _selectLocationFromMap(tappedPoint.latitude, tappedPoint.longitude);
+	}
 }
 
 // TaskDetailScreenWithState class - simplified version for edited tasks
@@ -1968,6 +2068,10 @@ class _TaskDetailScreenWithStateState extends State<TaskDetailScreenWithState> {
  // OpenStreetMap controllers  
  osm.MapController? _osmMapController;
  Set<OSMMarker> _osmMarkers = {};
+ 
+ // Map interaction state
+ bool _isLocationSelectionMode = false;
+ bool _mapExpanded = false;
 
  @override
  void initState() {
@@ -2347,6 +2451,7 @@ class _TaskDetailScreenWithStateState extends State<TaskDetailScreenWithState> {
      onMapCreated: (controller) {
        _osmMapController = controller;
      },
+	 onLongPress: _isLocationSelectionMode ? _onOSMMapLongPress : null,
      myLocationEnabled: false,
      myLocationButtonEnabled: false,
    );
@@ -2662,4 +2767,60 @@ class _TaskDetailScreenWithStateState extends State<TaskDetailScreenWithState> {
      ),
    );
  }
+ 
+	void _clearMapMarkers() {
+	  setState(() {
+		_googleMarkers = {};
+		_osmMarkers = {};
+	  });
+	}
+
+	void _updateMapMarkers() {
+	  _createMapMarkers();
+	}
+
+	void _toggleLocationSelectionMode() {
+	  setState(() {
+		_isLocationSelectionMode = !_isLocationSelectionMode;
+		_mapExpanded = _isLocationSelectionMode;
+		
+		if (_isLocationSelectionMode) {
+		  _clearMapMarkers();
+		} else {
+		  _updateMapMarkers();
+		}
+	  });
+	}
+
+	void _onMapLongPress(gmaps.LatLng tappedPoint) {
+	  _selectLocationFromMap(tappedPoint.latitude, tappedPoint.longitude);
+	}
+
+	void _onOSMMapLongPress(ll.LatLng tappedPoint) {
+	  _selectLocationFromMap(tappedPoint.latitude, tappedPoint.longitude);
+	}
+
+	void _selectLocationFromMap(double latitude, double longitude) async {
+	  setState(() {
+		_selectedLocation = UniversalLatLng(latitude, longitude);
+		_isLocationSelectionMode = false;
+		_mapExpanded = false;
+	  });
+	  
+	  await DatabaseHelper.instance.updateTaskLocation(
+		widget.taskLocation.copyWith(
+		  latitude: latitude,
+		  longitude: longitude,
+		),
+	  );
+	  
+	  _updateMapMarkers();
+	  
+	  ScaffoldMessenger.of(context).showSnackBar(
+		SnackBar(
+		  content: Text('Task location updated'),
+		  backgroundColor: Colors.green,
+		),
+	  );
+	}
 }

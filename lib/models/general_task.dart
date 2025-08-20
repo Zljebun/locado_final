@@ -1,39 +1,28 @@
-// models/task_location.dart - KOMPLETAN AŽURIRANI MODEL
+// models/general_task.dart - Model for tasks without location
 
-class TaskLocation {
+class GeneralTask {
   int? id;
-  double? latitude;
-  double? longitude;
   String title;
   List<String> taskItems;
   String colorHex;
 
-  // 🆕 NOVA POLJA ZA CALENDAR INTEGRATION
-  DateTime? scheduledDateTime;    // Optional datum/vreme kada treba uraditi task
-  int? linkedCalendarEventId;     // Link na povezani calendar event
+  // Calendar integration fields
+  DateTime? scheduledDateTime;
+  int? linkedCalendarEventId;
 
-  TaskLocation({
-	this.id,
-	this.latitude,
-	this.longitude,
-	required this.title,
+  GeneralTask({
+    this.id,
+    required this.title,
     required this.taskItems,
     required this.colorHex,
-    this.scheduledDateTime,        // 🆕 NOVO
-    this.linkedCalendarEventId,    // 🆕 NOVO
+    this.scheduledDateTime,
+    this.linkedCalendarEventId,
   });
 
-  // 🆕 HELPER PROPERTIES
+  // Helper properties
   bool get hasScheduledTime => scheduledDateTime != null;
   bool get hasLinkedCalendarEvent => linkedCalendarEventId != null;
-  bool get hasLocation => latitude != null && longitude != null;
-  String get locationStatus => hasLocation ? 'Located' : 'No location';
-  String get coordinatesDisplay {
-    if (!hasLocation) return 'No coordinates';
-	  return '${latitude!.toStringAsFixed(4)}, ${longitude!.toStringAsFixed(4)}';
-	}
 
-  // Helper za formatiranje scheduled time
   String get formattedScheduledTime {
     if (scheduledDateTime == null) return 'Not scheduled';
 
@@ -49,7 +38,6 @@ class TaskLocation {
     return '${months[date.month]} ${date.day} at $displayHour:$minute $period';
   }
 
-  // Helper za proveru da li je task scheduled za danas
   bool get isScheduledToday {
     if (scheduledDateTime == null) return false;
     final now = DateTime.now();
@@ -59,13 +47,11 @@ class TaskLocation {
         now.day == scheduled.day;
   }
 
-  // Helper za proveru da li je task scheduled u budućnosti
   bool get isScheduledFuture {
     if (scheduledDateTime == null) return false;
     return scheduledDateTime!.isAfter(DateTime.now());
   }
 
-  // Helper za proveru da li je task zakašnjeo
   bool get isOverdue {
     if (scheduledDateTime == null) return false;
     return scheduledDateTime!.isBefore(DateTime.now());
@@ -74,48 +60,39 @@ class TaskLocation {
   Map<String, dynamic> toMap() {
     return {
       'id': id,
-      'latitude': latitude,
-      'longitude': longitude,
       'title': title,
       'taskItems': taskItems.join('\n'),
       'colorHex': colorHex,
-      'scheduledDateTime': scheduledDateTime?.toIso8601String(),  // 🆕 NOVO
-      'linkedCalendarEventId': linkedCalendarEventId,             // 🆕 NOVO
+      'scheduledDateTime': scheduledDateTime?.toIso8601String(),
+      'linkedCalendarEventId': linkedCalendarEventId,
     };
   }
 
-  factory TaskLocation.fromMap(Map<String, dynamic> map) {
-    return TaskLocation(
+  factory GeneralTask.fromMap(Map<String, dynamic> map) {
+    return GeneralTask(
       id: map['id'],
-	  latitude: map['latitude']?.toDouble(),
-	  longitude: map['longitude']?.toDouble(),
       title: map['title'],
       taskItems: map['taskItems'].toString().split('\n').where((item) => item.trim().isNotEmpty).toList(),
       colorHex: map['colorHex'],
-      scheduledDateTime: map['scheduledDateTime'] != null      // 🆕 NOVO
+      scheduledDateTime: map['scheduledDateTime'] != null
           ? DateTime.parse(map['scheduledDateTime'])
           : null,
-      linkedCalendarEventId: map['linkedCalendarEventId'],     // 🆕 NOVO
+      linkedCalendarEventId: map['linkedCalendarEventId'],
     );
   }
 
-  // Copy with method for updates
-  TaskLocation copyWith({
+  GeneralTask copyWith({
     int? id,
-    double? latitude,
-    double? longitude,
     String? title,
     List<String>? taskItems,
     String? colorHex,
-    DateTime? scheduledDateTime,              // 🆕 NOVO
-    int? linkedCalendarEventId,               // 🆕 NOVO
-    bool clearScheduledDateTime = false,      // 🆕 Helper za clearing
-    bool clearLinkedCalendarEvent = false,   // 🆕 Helper za clearing
+    DateTime? scheduledDateTime,
+    int? linkedCalendarEventId,
+    bool clearScheduledDateTime = false,
+    bool clearLinkedCalendarEvent = false,
   }) {
-    return TaskLocation(
+    return GeneralTask(
       id: id ?? this.id,
-      latitude: latitude ?? this.latitude,
-      longitude: longitude ?? this.longitude,
       title: title ?? this.title,
       taskItems: taskItems ?? this.taskItems,
       colorHex: colorHex ?? this.colorHex,
@@ -130,31 +107,27 @@ class TaskLocation {
 
   @override
   String toString() {
-    return 'TaskLocation{id: $id, title: $title, lat: $latitude, lng: $longitude, '
-        'items: ${taskItems.length}, color: $colorHex, '
-        'scheduled: ${scheduledDateTime?.toString() ?? 'none'}, '
-        'linkedEvent: ${linkedCalendarEventId ?? 'none'}}';
+    return 'GeneralTask{id: $id, title: $title, items: ${taskItems.length}, '
+        'color: $colorHex, scheduled: ${scheduledDateTime?.toString() ?? 'none'}}';
   }
 
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
-          other is TaskLocation &&
+          other is GeneralTask &&
               runtimeType == other.runtimeType &&
               id == other.id;
 
   @override
   int get hashCode => id.hashCode;
 
-  // 🆕 HELPER METODA ZA KREIRANJE CALENDAR EVENT NASLOVA
   String generateCalendarEventTitle() {
-    return 'Task: $title';
+    return 'General Task: $title';
   }
 
-  // 🆕 HELPER METODA ZA KREIRANJE CALENDAR EVENT OPISA
   String generateCalendarEventDescription() {
     if (taskItems.isEmpty) {
-      return 'Complete task at this location';
+      return 'Complete general task';
     }
 
     if (taskItems.length == 1) {

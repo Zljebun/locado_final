@@ -350,8 +350,8 @@ class LocadoBackgroundService {
           // ✅ KORISTIMO RADIUS IZ SETTINGS-A
           await addGeofence(
             id: geofenceId,
-            latitude: taskLocation.latitude,
-            longitude: taskLocation.longitude,
+			latitude: taskLocation.latitude!,
+			longitude: taskLocation.longitude!,
             radius: radius, // ✅ ISPRAVKA OVDJE
             title: taskLocation.title,
             description: 'You are near: ${taskLocation.title}',

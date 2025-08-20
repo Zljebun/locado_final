@@ -10,6 +10,7 @@ import 'package:locado_final/screens/notification_service.dart';
 import 'search_location_screen.dart';
 import '../services/geofencing_integration_helper.dart';
 import '../widgets/osm_map_widget.dart';
+import 'package:locado_final/models/general_task.dart';
 
 // Enum for map provider selection
 enum MapProvider { googleMaps, openStreetMap }
@@ -42,10 +43,10 @@ class UniversalLatLng {
 }
 
 class TaskInputScreen extends StatefulWidget {
-  final gmaps.LatLng location; // Keep Google Maps type for compatibility
+  final gmaps.LatLng? location; // Now optional
   final String? locationName;
 
-  const TaskInputScreen({Key? key, required this.location, this.locationName,}) : super(key: key);
+  const TaskInputScreen({Key? key, this.location, this.locationName,}) : super(key: key);
 
   @override
   State<TaskInputScreen> createState() => _TaskInputScreenState();
@@ -77,12 +78,18 @@ class _TaskInputScreenState extends State<TaskInputScreen> {
   bool _enableScheduling = false;
 
   final GlobalKey _addButtonKey = GlobalKey();
+  
+  // Map interaction state
+  bool _isLocationSelectionMode = false;
+  bool _mapExpanded = false;
 
   @override
   void initState() {
     super.initState();
     _loadMapProviderSetting();
-    _selectedLocation = UniversalLatLng.fromGoogleMaps(widget.location);
+	_selectedLocation = widget.location != null 
+		? UniversalLatLng.fromGoogleMaps(widget.location!) 
+		: null;
 
     _selectedLocationName = widget.locationName;
 
@@ -121,8 +128,15 @@ class _TaskInputScreenState extends State<TaskInputScreen> {
   }
 
   // Create markers for current provider
-  void _createMapMarkers() {
-    if (_selectedLocation == null) return;
+	void _createMapMarkers() {
+	  if (_selectedLocation == null) {
+		// Clear markers if no location selected
+		setState(() {
+		  _googleMarkers = {};
+		  _osmMarkers = {};
+		});
+		return;
+	  }
 
     if (_currentMapProvider == MapProvider.googleMaps) {
       _createGoogleMarkers();
@@ -437,8 +451,8 @@ class _TaskInputScreenState extends State<TaskInputScreen> {
       {'hour': _scheduledTime!.hour, 'minute': _scheduledTime!.minute} : null,
       'enableScheduling': _enableScheduling,
       'originalLocation': {
-        'latitude': widget.location.latitude,
-        'longitude': widget.location.longitude,
+		'latitude': widget.location?.latitude,
+		'longitude': widget.location?.longitude,
       },
       'selectedLocation': _selectedLocation != null ? {
         'latitude': _selectedLocation!.latitude,
@@ -525,7 +539,9 @@ class _TaskInputScreenState extends State<TaskInputScreen> {
 
   // Updated _saveTask method (convert UniversalLatLng back to Google format for database compatibility)
   Future<void> _saveTask() async {
-    final usedLocation = _selectedLocation ?? UniversalLatLng.fromGoogleMaps(widget.location);
+    final usedLocation = _selectedLocation ?? (widget.location != null 
+        ? UniversalLatLng.fromGoogleMaps(widget.location!) 
+        : null);
     final title = _titleController.text.trim();
     TaskLocation taskLocation;
     DateTime? scheduledDateTime;
@@ -544,48 +560,52 @@ class _TaskInputScreenState extends State<TaskInputScreen> {
     }
 
     // Create TaskLocation based on input (convert to database format)
-    if (title.isEmpty && _taskItems.isEmpty) {
-      final defaultTitle = _selectedLocationName ?? 'Task at ${usedLocation.latitude.toStringAsFixed(4)}, ${usedLocation.longitude.toStringAsFixed(4)}';
+	if (title.isEmpty && _taskItems.isEmpty) {
+	  final defaultTitle = _selectedLocationName ?? 
+		  (usedLocation != null 
+			  ? 'Task at ${usedLocation.latitude.toStringAsFixed(4)}, ${usedLocation.longitude.toStringAsFixed(4)}'
+			  : 'General Task');
 
-      taskLocation = TaskLocation(
-        latitude: usedLocation.latitude,
-        longitude: usedLocation.longitude,
-        title: defaultTitle,
-        taskItems: ['Visit this location'],
-        colorHex: '#${_selectedColor.value.toRadixString(16).substring(2)}',
-        scheduledDateTime: scheduledDateTime,
-      );
-    } else if (title.isNotEmpty && _taskItems.isEmpty) {
-      taskLocation = TaskLocation(
-        latitude: usedLocation.latitude,
-        longitude: usedLocation.longitude,
-        title: title,
-        taskItems: ['Complete task'],
-        colorHex: '#${_selectedColor.value.toRadixString(16).substring(2)}',
-        scheduledDateTime: scheduledDateTime,
-      );
-    } else if (title.isEmpty && _taskItems.isNotEmpty) {
-      final defaultTitle = _selectedLocationName ?? 'Task at location';
+	  taskLocation = TaskLocation(
+		latitude: usedLocation?.latitude,
+		longitude: usedLocation?.longitude,
+		title: defaultTitle,
+		taskItems: usedLocation != null ? ['Visit this location'] : ['Complete this task'],
+		colorHex: '#${_selectedColor.value.toRadixString(16).substring(2)}',
+		scheduledDateTime: scheduledDateTime,
+	  );
+	} else if (title.isNotEmpty && _taskItems.isEmpty) {
+	  taskLocation = TaskLocation(
+		latitude: usedLocation?.latitude,
+		longitude: usedLocation?.longitude,
+		title: title,
+		taskItems: ['Complete task'],
+		colorHex: '#${_selectedColor.value.toRadixString(16).substring(2)}',
+		scheduledDateTime: scheduledDateTime,
+	  );
+	} else if (title.isEmpty && _taskItems.isNotEmpty) {
+	  final defaultTitle = _selectedLocationName ?? 
+		  (usedLocation != null ? 'Task at location' : 'Task List');
 
-      taskLocation = TaskLocation(
-        latitude: usedLocation.latitude,
-        longitude: usedLocation.longitude,
-        title: defaultTitle,
-        taskItems: _taskItems,
-        colorHex: '#${_selectedColor.value.toRadixString(16).substring(2)}',
-        scheduledDateTime: scheduledDateTime,
-      );
-    } else {
-      // Normal case - both title and items
-      taskLocation = TaskLocation(
-        latitude: usedLocation.latitude,
-        longitude: usedLocation.longitude,
-        title: title,
-        taskItems: _taskItems,
-        colorHex: '#${_selectedColor.value.toRadixString(16).substring(2)}',
-        scheduledDateTime: scheduledDateTime,
-      );
-    }
+	  taskLocation = TaskLocation(
+		latitude: usedLocation?.latitude,
+		longitude: usedLocation?.longitude,
+		title: defaultTitle,
+		taskItems: _taskItems,
+		colorHex: '#${_selectedColor.value.toRadixString(16).substring(2)}',
+		scheduledDateTime: scheduledDateTime,
+	  );
+	} else {
+	  // Normal case - both title and items
+	  taskLocation = TaskLocation(
+		latitude: usedLocation?.latitude,
+		longitude: usedLocation?.longitude,
+		title: title,
+		taskItems: _taskItems,
+		colorHex: '#${_selectedColor.value.toRadixString(16).substring(2)}',
+		scheduledDateTime: scheduledDateTime,
+	  );
+	}
 
     try {
       // 1. Save task to database
@@ -635,18 +655,22 @@ class _TaskInputScreenState extends State<TaskInputScreen> {
         }
       }
 
-      // 3. Auto geofencing for new task
-      final helper = GeofencingIntegrationHelper.instance;
-      if (helper.isInitialized && helper.isServiceRunning) {
-        final success = await helper.addTaskLocationGeofence(taskLocation);
-        if (success) {
-          debugPrint('✅ Auto-added geofencing for new task: ${taskLocation.title}');
-        } else {
-          debugPrint('⚠️ Failed to auto-add geofencing for: ${taskLocation.title}');
-        }
-      } else {
-        debugPrint('⚠️ Geofencing service not running - task saved without geofencing');
-      }
+		// 3. Auto geofencing for new task (only if task has location)
+		if (taskLocation.hasLocation) {
+		  final helper = GeofencingIntegrationHelper.instance;
+		  if (helper.isInitialized && helper.isServiceRunning) {
+			final success = await helper.addTaskLocationGeofence(taskLocation);
+			if (success) {
+			  debugPrint('✅ Auto-added geofencing for new task: ${taskLocation.title}');
+			} else {
+			  debugPrint('⚠️ Failed to auto-add geofencing for: ${taskLocation.title}');
+			}
+		  } else {
+			debugPrint('⚠️ Geofencing service not running - task saved without geofencing');
+		  }
+		} else {
+		  debugPrint('ℹ️ Task has no location - skipping geofencing setup');
+		}
     } catch (e) {
       debugPrint('❌ Error saving task or adding geofencing: $e');
     }
@@ -684,9 +708,97 @@ class _TaskInputScreenState extends State<TaskInputScreen> {
         children: [
           // HYBRID MAP PREVIEW - show current provider
           Container(
-            height: 200,
+            height: _mapExpanded ? MediaQuery.of(context).size.height * 0.7 : 200,
             child: _buildMapPreview(),
           ),
+		  
+		  if (_isLocationSelectionMode)
+		  Container(
+			padding: EdgeInsets.all(16),
+			color: Colors.blue.shade50,
+			child: Row(
+			  children: [
+				Icon(Icons.touch_app, color: Colors.blue),
+				SizedBox(width: 8),
+				Expanded(
+				  child: Text(
+					'Long press on the map to select a location for your task',
+					style: TextStyle(color: Colors.blue.shade700, fontWeight: FontWeight.w500),
+				  ),
+				),
+				TextButton(
+				  onPressed: _toggleLocationSelectionMode,
+				  child: Text('Cancel'),
+				),
+			  ],
+			),
+		  ),
+		  
+		Container(
+		  margin: const EdgeInsets.all(16.0),
+		  padding: const EdgeInsets.all(12),
+		  decoration: BoxDecoration(
+			color: _selectedLocation != null ? Colors.green.shade50 : Colors.orange.shade50,
+			borderRadius: BorderRadius.circular(8),
+			border: Border.all(
+			  color: _selectedLocation != null ? Colors.green.shade200 : Colors.orange.shade200
+			),
+		  ),
+		  child: Row(
+			children: [
+			  Icon(
+				_selectedLocation != null ? Icons.location_on : Icons.location_off,
+				color: _selectedLocation != null ? Colors.green : Colors.orange,
+				size: 20,
+			  ),
+			  const SizedBox(width: 8),
+			  Expanded(
+				child: Column(
+				  crossAxisAlignment: CrossAxisAlignment.start,
+				  children: [
+					Text(
+					  _selectedLocation != null ? 'Location Set:' : 'No Location Set (Optional)',
+					  style: TextStyle(
+						fontSize: 12,
+						fontWeight: FontWeight.bold,
+						color: _selectedLocation != null ? Colors.green.shade700 : Colors.orange.shade700,
+					  ),
+					),
+					Text(
+					  _selectedLocation != null 
+						? (_selectedLocationName ?? 'Custom location selected')
+						: 'Tap "Search Location" to add a location to this task',
+					  style: TextStyle(
+						fontSize: 14,
+						color: _selectedLocation != null ? Colors.green.shade600 : Colors.orange.shade600,
+					  ),
+					),
+				  ],
+				),
+			  ),
+			  if (_selectedLocation != null)
+				IconButton(
+				  onPressed: () {
+					setState(() {
+					  _selectedLocation = null;
+					  _selectedLocationName = null;
+					});
+					_createMapMarkers();
+					ScaffoldMessenger.of(context).showSnackBar(
+					  const SnackBar(
+						content: Text('Location removed from task'),
+						backgroundColor: Colors.orange,
+					  ),
+					);
+				  },
+				  icon: const Icon(Icons.clear, size: 16),
+				  tooltip: 'Remove Location',
+				  constraints: const BoxConstraints(),
+				  padding: EdgeInsets.zero,
+				),
+			],
+		  ),
+		),
 
           // Task input form
           Expanded(
@@ -718,12 +830,15 @@ class _TaskInputScreenState extends State<TaskInputScreen> {
                                 tooltip: _enableScheduling ? 'Edit Schedule' : 'Add Schedule',
                               ),
 
-                              // Location button
-                              IconButton(
-                                onPressed: _selectLocation,
-                                icon: const Icon(Icons.location_on, color: Colors.blue),
-                                tooltip: 'Search Location',
-                              ),
+								// Location button  
+								IconButton(
+								  onPressed: _toggleLocationSelectionMode,  // ✅ ISPRAVKA
+								  icon: Icon(
+									_isLocationSelectionMode ? Icons.location_searching : Icons.location_on,
+									color: _isLocationSelectionMode ? Colors.red : Colors.blue,
+								  ),
+								  tooltip: _isLocationSelectionMode ? 'Cancel Selection' : 'Select Location',
+								),
 
                               // Color button
                               IconButton(
@@ -778,7 +893,7 @@ class _TaskInputScreenState extends State<TaskInputScreen> {
                                     ),
                                   ),
                                   IconButton(
-                                    onPressed: _selectLocation,
+                                    onPressed: _toggleLocationSelectionMode,
                                     icon: Icon(Icons.edit, color: Colors.green, size: 16),
                                     tooltip: 'Change Location',
                                     constraints: BoxConstraints(),
@@ -920,7 +1035,8 @@ class _TaskInputScreenState extends State<TaskInputScreen> {
        print('✅ TASK INPUT: Google Map controller ready');
      },
      initialCameraPosition: gmaps.CameraPosition(
-       target: _selectedLocation?.toGoogleMaps() ?? widget.location,
+       target: _selectedLocation?.toGoogleMaps() ?? 
+        (widget.location ?? const gmaps.LatLng(48.2082, 16.3738)),
        zoom: 15,
      ),
      markers: _googleMarkers,
@@ -942,7 +1058,7 @@ class _TaskInputScreenState extends State<TaskInputScreen> {
 	return OSMMapWidget(
 	  initialCameraPosition: OSMCameraPosition(
 		target: _selectedLocation?.toOpenStreetMap() ?? 
-        ll.LatLng(widget.location.latitude, widget.location.longitude),
+        ll.LatLng(widget.location?.latitude ?? 48.2082, widget.location?.longitude ?? 16.3738),
 		zoom: 15.0,
 	  ),
 	  markers: _osmMarkers,
@@ -952,8 +1068,50 @@ class _TaskInputScreenState extends State<TaskInputScreen> {
 	  },
 	  myLocationEnabled: false,
 	  myLocationButtonEnabled: false,
+	  onLongPress: _isLocationSelectionMode ? _onOSMMapLongPress : null,
 	);
  }
+ 
+	void _onOSMMapLongPress(ll.LatLng tappedPoint) {
+	  _selectLocationFromMap(tappedPoint.latitude, tappedPoint.longitude);
+	}
+
+	void _selectLocationFromMap(double latitude, double longitude) {
+	  setState(() {
+		_selectedLocation = UniversalLatLng(latitude, longitude);
+		_selectedLocationName = 'Selected Location';
+		_isLocationSelectionMode = false;
+		_mapExpanded = false;
+	  });
+	  
+	  _createMapMarkers();
+	  
+	  ScaffoldMessenger.of(context).showSnackBar(
+		SnackBar(
+		  content: Text('Location selected: ${latitude.toStringAsFixed(4)}, ${longitude.toStringAsFixed(4)}'),
+		  backgroundColor: Colors.green,
+		  duration: Duration(seconds: 2),
+		),
+	  );
+	}
+ 
+	void _toggleLocationSelectionMode() {
+	  setState(() {
+		_isLocationSelectionMode = !_isLocationSelectionMode;
+		_mapExpanded = _isLocationSelectionMode;
+		
+		if (_isLocationSelectionMode) {
+		  // Entering selection mode - hide current marker temporarily
+		  if (_selectedLocation != null) {
+			_googleMarkers = {};
+			_osmMarkers = {};
+		  }
+		} else {
+		  // Exiting selection mode - restore markers
+		  _createMapMarkers();
+		}
+	  });
+	}
 }
 
 // TaskInputScreenWithState class (updated for hybrid support)
@@ -999,6 +1157,10 @@ class _TaskInputScreenWithStateState extends State<TaskInputScreenWithState> {
  DateTime? _scheduledDate;
  TimeOfDay? _scheduledTime;
  bool _enableScheduling = false;
+ 
+ // Map interaction state
+ bool _isLocationSelectionMode = false;
+ bool _mapExpanded = false;
 
  final GlobalKey _addButtonKey = GlobalKey();
 
@@ -1537,65 +1699,119 @@ class _TaskInputScreenWithStateState extends State<TaskInputScreenWithState> {
      );
    }
 
-   try {
-     // Save task to database
-     final taskId = await DatabaseHelper.instance.addTaskLocation(taskLocation);
-     taskLocation = taskLocation.copyWith(id: taskId);
-     debugPrint('Hybrid task saved to database: ${taskLocation.title}');
+	try {
+	  if (usedLocation != null) {
+		// Save as TaskLocation (with location)
+		final taskId = await DatabaseHelper.instance.addTaskLocation(taskLocation);
+		taskLocation = taskLocation.copyWith(id: taskId);
+		debugPrint('Task with location saved: ${taskLocation.title}');
+		
+		// Calendar event creation (same as before)
+		if (scheduledDateTime != null) {
+		  final calendarEvent = CalendarEvent(
+			title: taskLocation.generateCalendarEventTitle(),
+			description: taskLocation.generateCalendarEventDescription(),
+			dateTime: scheduledDateTime,
+			reminderMinutes: [15],
+			colorHex: taskLocation.colorHex,
+			linkedTaskLocationId: taskId,
+		  );
 
-     // Create calendar event if scheduled
-     if (scheduledDateTime != null) {
-       final calendarEvent = CalendarEvent(
-         title: taskLocation.generateCalendarEventTitle(),
-         description: taskLocation.generateCalendarEventDescription(),
-         dateTime: scheduledDateTime,
-         reminderMinutes: [15],
-         colorHex: taskLocation.colorHex,
-         linkedTaskLocationId: taskId,
-       );
+		  final eventId = await DatabaseHelper.instance.addCalendarEvent(calendarEvent);
+		  await DatabaseHelper.instance.linkTaskToCalendarEvent(taskId, eventId);
 
-       final eventId = await DatabaseHelper.instance.addCalendarEvent(calendarEvent);
-       await DatabaseHelper.instance.linkTaskToCalendarEvent(taskId, eventId);
+		  final eventWithId = calendarEvent.copyWith(id: eventId);
+		  await NotificationService.scheduleEventReminders(eventWithId);
 
-       final eventWithId = calendarEvent.copyWith(id: eventId);
-       await NotificationService.scheduleEventReminders(eventWithId);
+		  debugPrint('✅ Created linked calendar event: ${calendarEvent.title}');
 
-       debugPrint('✅ Created linked calendar event: ${calendarEvent.title}');
+		  if (mounted) {
+			ScaffoldMessenger.of(context).showSnackBar(
+			  SnackBar(
+				content: Row(
+				  children: [
+					const Icon(Icons.event, color: Colors.white),
+					const SizedBox(width: 8),
+					Expanded(
+					  child: Text('Task scheduled for ${_formatScheduledDateTime()}'),
+					),
+				  ],
+				),
+				backgroundColor: Colors.green,
+				duration: const Duration(seconds: 3),
+			  ),
+			);
+		  }
+		}
 
-       if (mounted) {
-         ScaffoldMessenger.of(context).showSnackBar(
-           SnackBar(
-             content: Row(
-               children: [
-                 const Icon(Icons.event, color: Colors.white),
-                 const SizedBox(width: 8),
-                 Expanded(
-                   child: Text('Task scheduled for ${_formatScheduledDateTime()}'),
-                 ),
-               ],
-             ),
-             backgroundColor: Colors.green,
-             duration: const Duration(seconds: 3),
-           ),
-         );
-       }
-     }
+		// Geofencing for located tasks
+		final helper = GeofencingIntegrationHelper.instance;
+		if (helper.isInitialized && helper.isServiceRunning) {
+		  final success = await helper.addTaskLocationGeofence(taskLocation);
+		  if (success) {
+			debugPrint('✅ Auto-added geofencing for new task: ${taskLocation.title}');
+		  } else {
+			debugPrint('⚠️ Failed to auto-add geofencing for: ${taskLocation.title}');
+		  }
+		} else {
+		  debugPrint('⚠️ Geofencing service not running - task saved without geofencing');
+		}
+		
+	  } else {
+		// Save as GeneralTask (without location)
+		final generalTask = GeneralTask(
+		  title: title.isNotEmpty ? title : 'General Task',
+		  taskItems: _taskItems.isNotEmpty ? _taskItems : ['Complete this task'],
+		  colorHex: '#${_selectedColor.value.toRadixString(16).substring(2)}',
+		  scheduledDateTime: scheduledDateTime,
+		);
+		
+		final taskId = await DatabaseHelper.instance.addGeneralTask(generalTask);
+		debugPrint('General task saved: ${generalTask.title}');
+		
+		// Calendar event creation for general tasks
+		if (scheduledDateTime != null) {
+		  final calendarEvent = CalendarEvent(
+			title: generalTask.generateCalendarEventTitle(),
+			description: generalTask.generateCalendarEventDescription(),
+			dateTime: scheduledDateTime,
+			reminderMinutes: [15],
+			colorHex: generalTask.colorHex,
+			linkedTaskLocationId: null, // General tasks don't have location
+		  );
 
-     // Auto-add geofencing
-     final helper = GeofencingIntegrationHelper.instance;
-     if (helper.isInitialized && helper.isServiceRunning) {
-       final success = await helper.addTaskLocationGeofence(taskLocation);
-       if (success) {
-         debugPrint('✅ Auto-added geofencing for hybrid task: ${taskLocation.title}');
-       } else {
-         debugPrint('⚠️ Failed to auto-add geofencing for: ${taskLocation.title}');
-       }
-     } else {
-       debugPrint('⚠️ Geofencing service not running - task saved without geofencing');
-     }
-   } catch (e) {
-     debugPrint('❌ Error saving hybrid task or adding geofencing: $e');
-   }
+		  final eventId = await DatabaseHelper.instance.addCalendarEvent(calendarEvent);
+		  await DatabaseHelper.instance.linkGeneralTaskToCalendarEvent(taskId, eventId);
+
+		  final eventWithId = calendarEvent.copyWith(id: eventId);
+		  await NotificationService.scheduleEventReminders(eventWithId);
+
+		  debugPrint('✅ Created linked calendar event for general task: ${calendarEvent.title}');
+
+		  if (mounted) {
+			ScaffoldMessenger.of(context).showSnackBar(
+			  SnackBar(
+				content: Row(
+				  children: [
+					const Icon(Icons.event, color: Colors.white),
+					const SizedBox(width: 8),
+					Expanded(
+					  child: Text('General task scheduled for ${_formatScheduledDateTime()}'),
+					),
+				  ],
+				),
+				backgroundColor: Colors.green,
+				duration: const Duration(seconds: 3),
+			  ),
+			);
+		  }
+		}
+		
+		debugPrint('ℹ️ General task has no location - no geofencing needed');
+	  }
+	} catch (e) {
+	  debugPrint('⚠️ Error saving task: $e');
+	}
 
    setState(() => _isLoading = false);
    Navigator.pop(context, true);
@@ -1629,9 +1845,31 @@ class _TaskInputScreenWithStateState extends State<TaskInputScreenWithState> {
        children: [
          // HYBRID MAP PREVIEW
          Container(
-           height: 200,
+           height: _mapExpanded ? MediaQuery.of(context).size.height * 0.7 : 200,
            child: _buildMapPreview(),
          ),
+		 
+		 if (_isLocationSelectionMode)
+		  Container(
+			padding: EdgeInsets.all(16),
+			color: Colors.blue.shade50,
+			child: Row(
+			  children: [
+				Icon(Icons.touch_app, color: Colors.blue),
+				SizedBox(width: 8),
+				Expanded(
+				  child: Text(
+					'Long press on the map to select a location for your task',
+					style: TextStyle(color: Colors.blue.shade700, fontWeight: FontWeight.w500),
+				  ),
+				),
+				TextButton(
+				  onPressed: _toggleLocationSelectionMode,
+				  child: Text('Cancel'),
+				),
+			  ],
+			),
+		  ),
 
          // Task input form
          Expanded(
@@ -1664,12 +1902,14 @@ class _TaskInputScreenWithStateState extends State<TaskInputScreenWithState> {
                              ),
 
                              // Location button
-                             IconButton(
-                               onPressed: _selectLocation,
-                               icon: const Icon(Icons.location_on, color: Colors.blue),
-                               tooltip: 'Search Location',
-                             ),
-
+								IconButton(
+								  onPressed: _toggleLocationSelectionMode,
+								  icon: Icon(
+									_isLocationSelectionMode ? Icons.location_searching : Icons.location_on,
+									color: _isLocationSelectionMode ? Colors.red : Colors.blue,
+								  ),
+								  tooltip: _isLocationSelectionMode ? 'Cancel Selection' : 'Select Location',
+								),
                              // Color button
                              IconButton(
                                onPressed: _showColorPicker,
@@ -1896,8 +2136,49 @@ class _TaskInputScreenWithStateState extends State<TaskInputScreenWithState> {
 		_osmMapController = controller;
 		print('✅ TASK INPUT: OSM Map controller ready');
 	  },
+	  onLongPress: _isLocationSelectionMode ? _onOSMMapLongPress : null,
 	  myLocationEnabled: false,
 	  myLocationButtonEnabled: false,
 	);
  }
+ 
+	void _toggleLocationSelectionMode() {
+	  setState(() {
+		_isLocationSelectionMode = !_isLocationSelectionMode;
+		_mapExpanded = _isLocationSelectionMode;
+		
+		if (_isLocationSelectionMode) {
+		  if (_selectedLocation != null) {
+			_googleMarkers = {};
+			_osmMarkers = {};
+		  }
+		} else {
+		  _createMapMarkers();
+		}
+	  });
+	}
+
+
+	void _onOSMMapLongPress(ll.LatLng tappedPoint) {
+	  _selectLocationFromMap(tappedPoint.latitude, tappedPoint.longitude);
+	}
+
+	void _selectLocationFromMap(double latitude, double longitude) {
+	  setState(() {
+		_selectedLocation = UniversalLatLng(latitude, longitude);
+		_selectedLocationName = 'Selected Location';
+		_isLocationSelectionMode = false;
+		_mapExpanded = false;
+	  });
+	  
+	  _createMapMarkers();
+	  
+	  ScaffoldMessenger.of(context).showSnackBar(
+		SnackBar(
+		  content: Text('Location selected: ${latitude.toStringAsFixed(4)}, ${longitude.toStringAsFixed(4)}'),
+		  backgroundColor: Colors.green,
+		  duration: Duration(seconds: 2),
+		),
+	  );
+	}
 }

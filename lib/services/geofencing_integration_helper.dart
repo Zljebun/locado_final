@@ -305,8 +305,8 @@ class GeofencingIntegrationHelper {
         if (!isTaskMonitored(taskId)) {
           await addTaskToGeofencing(
             taskId: taskId,
-            latitude: taskLocation.latitude,
-            longitude: taskLocation.longitude,
+			latitude: taskLocation.latitude!,
+			longitude: taskLocation.longitude!,
             title: taskLocation.title,
           );
         }

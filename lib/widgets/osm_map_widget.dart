@@ -323,9 +323,11 @@ class _OSMMapWidgetState extends State<OSMMapWidget> {
         onTap: (tapPosition, point) {
           widget.onTap?.call(point);
         },
-        onLongPress: (tapPosition, point) {
-          widget.onLongPress?.call(point);
-        },
+		onLongPress: (tapPosition, point) {
+		  if (widget.onLongPress != null) {
+			widget.onLongPress!(point);
+		  }
+		},
       ),
       children: [
         // OPTIMIZED: OpenStreetMap tile layer with faster tile server
