@@ -1192,6 +1192,9 @@ Open this file with Locado app to import the task!''',
 	}
 
 	Future<void> _convertToTaskLocation(double latitude, double longitude) async {
+	  final originalTaskId = widget.generalTask.id;
+	  print('🔄 CONVERT: Starting conversion for GeneralTask ID: $originalTaskId');
+	  
 	  // Convert GeneralTask to TaskLocation
 	  final taskLocation = TaskLocation(
 		title: widget.generalTask.title,
@@ -1204,6 +1207,7 @@ Open this file with Locado app to import the task!''',
 	  
 	  // Save new TaskLocation
 	  final taskId = await DatabaseHelper.instance.addTaskLocation(taskLocation);
+	  print('🔄 CONVERT: Created new TaskLocation with ID: $taskId');
 	  
 	  // Add geofencing
 	  final helper = GeofencingIntegrationHelper.instance;
@@ -1212,17 +1216,26 @@ Open this file with Locado app to import the task!''',
 		await helper.addTaskLocationGeofence(taskWithId);
 	  }
 	  
-	  // Delete old GeneralTask
+	  // Delete old GeneralTask AND TaskLocation with same ID
 	  await DatabaseHelper.instance.deleteGeneralTask(widget.generalTask.id!);
+	  print('🔄 CONVERT: Deleted old GeneralTask with ID: ${widget.generalTask.id}');
+	  
+	  // DODAJ OVO - briši i TaskLocation sa istim ID-om
+	  try {
+		await DatabaseHelper.instance.deleteTaskLocation(widget.generalTask.id!);
+		print('🔄 CONVERT: Also deleted TaskLocation with ID: ${widget.generalTask.id}');
+	  } catch (e) {
+		print('🔄 CONVERT: No TaskLocation found with ID: ${widget.generalTask.id} (this is OK)');
+	  }
 	  
 	  ScaffoldMessenger.of(context).showSnackBar(
 		SnackBar(content: Text('Task converted to location-based task')),
 	  );
 	  
 	  Navigator.pop(context, {
-		  'action': 'converted', 
-		  'originalTaskId': widget.generalTask.id
-		});
+		'action': 'converted', 
+		'originalTaskId': originalTaskId
+	  });
 	}
 	
 	void _onMapLongPress(ll.LatLng tappedPoint) {

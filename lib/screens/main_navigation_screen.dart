@@ -1188,26 +1188,6 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
             ),
           ),
 		  
-		// Task list
-		ElevatedButton(
-		  onPressed: () async {
-			print('MANUAL RELOAD: Force refreshing general tasks');
-			setState(() {
-			  _cachedGeneralTasks = null;
-			  _isLoadingGeneralTasks = true;
-			});
-			
-			final freshTasks = await DatabaseHelper.instance.getAllGeneralTasks();
-			print('MANUAL RELOAD: Found ${freshTasks.length} general tasks in database');
-			
-			setState(() {
-			  _cachedGeneralTasks = freshTasks;
-			  _isLoadingGeneralTasks = false;
-			});
-		  },
-		  child: Text('Force Reload General Tasks'),
-		),
-
         // Task list
 		Expanded(
 		  child: ListView.separated(
@@ -1708,39 +1688,43 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
 		  await _loadTaskData();
 		}
 	  } else {
-		// Task bez lokacije - konvertuj u GeneralTask i otvori GeneralTaskDetailScreen
-		print('🔄 CONVERTING: TaskLocation without coordinates to GeneralTask');
-		
-		final convertedGeneralTask = GeneralTask(  // PROMENI IME VARIJABLE
-		  id: task.id,
-		  title: task.title,
-		  taskItems: List<String>.from(task.taskItems),
-		  colorHex: task.colorHex,
-		  scheduledDateTime: task.scheduledDateTime,
-		  linkedCalendarEventId: task.linkedCalendarEventId,
-		);
-		
-		final result = await Navigator.push(
-		  context,
-		  MaterialPageRoute(
-			builder: (ctx) => GeneralTaskDetailScreen(generalTask: convertedGeneralTask), // KORISTI NOVO IME
-		  ),
-		);
+		  // Task bez lokacije - konvertuj u GeneralTask i otvori GeneralTaskDetailScreen
+		  print('🔄 CONVERTING: TaskLocation without coordinates to GeneralTask');
+		  
+		  final originalTaskLocationId = task.id; // Sačuvaj original ID
+		  
+		  final convertedGeneralTask = GeneralTask(
+			id: task.id,
+			title: task.title,
+			taskItems: List<String>.from(task.taskItems),
+			colorHex: task.colorHex,
+			scheduledDateTime: task.scheduledDateTime,
+			linkedCalendarEventId: task.linkedCalendarEventId,
+		  );
+		  
+		  final result = await Navigator.push(
+			context,
+			MaterialPageRoute(
+			  builder: (ctx) => GeneralTaskDetailScreen(generalTask: convertedGeneralTask),
+			),
+		  );
 
-		if (result != null && result is Map && result['action'] == 'converted') {
-		  // Eksplicitno ukloni konvertovani task iz cache-a
-		  if (_cachedGeneralTasks != null) {
-			final convertedTaskId = result['originalTaskId']; // Dodaj ovo u result
-			_cachedGeneralTasks!.removeWhere((task) => task.id == convertedTaskId);
+		  if (result != null && result is Map && result['action'] == 'converted') {
+			// Ukloni originalni TaskLocation iz cache-a (ne GeneralTask!)
+			if (_cachedTasks != null) {
+			  _cachedTasks!.removeWhere((t) => t.id == originalTaskLocationId);
+			}
+			if (_cachedSortedTasks != null) {
+			  _cachedSortedTasks!.removeWhere((twd) => twd.task.id == originalTaskLocationId);
+			}
+			
+			// Refreshuj cache
+			_cachedTasks = null;
+			_cachedSortedTasks = null;
+			
+			await _loadTaskData();
 		  }
-		  
-		  // Refreshuj i task locations cache
-		  _cachedTasks = null;
-		  _cachedSortedTasks = null;
-		  
-		  await _loadTaskData();
 		}
-	  }
 	}
 
   void _deleteTask(TaskLocation task) {
@@ -2650,6 +2634,8 @@ Future<void> _selectMapProvider(String provider) async {
 	
 	void _openGeneralTaskDetail(GeneralTask generalTask) async {
 	  print('📄 OPEN GENERAL TASK DETAIL: Opening task: ${generalTask.title}');
+	  print('📄 DEBUG: GeneralTask ID: ${generalTask.id}');
+	  print('📄 DEBUG: Current _cachedGeneralTasks count: ${_cachedGeneralTasks?.length ?? 0}');
 	  
 	  final result = await Navigator.push(
 		context,
@@ -2658,8 +2644,36 @@ Future<void> _selectMapProvider(String provider) async {
 		),
 	  );
 
-	  if (result == true) {
-		await _loadTaskData();
+	  print('📄 DEBUG: Result from GeneralTaskDetailScreen: $result');
+
+	  if (result != null) {
+		if (result is Map && result['action'] == 'converted') {
+		  print('CONVERSION DEBUG: Task converted, result: $result');
+		  
+		  final convertedTaskId = result['originalTaskId'];
+		  print('CONVERSION DEBUG: originalTaskId from result: $convertedTaskId');
+		  print('CONVERSION DEBUG: generalTask.id: ${generalTask.id}');
+		  
+		  // Eksplicitno ukloni konvertovani task iz cache-a
+		  if (_cachedGeneralTasks != null) {
+			print('CONVERSION DEBUG: General tasks before: ${_cachedGeneralTasks!.length}');
+			print('CONVERSION DEBUG: General task IDs before: ${_cachedGeneralTasks!.map((t) => t.id).toList()}');
+			
+			_cachedGeneralTasks!.removeWhere((task) => task.id == convertedTaskId);
+			
+			print('CONVERSION DEBUG: General tasks after: ${_cachedGeneralTasks!.length}');
+			print('CONVERSION DEBUG: General task IDs after: ${_cachedGeneralTasks!.map((t) => t.id).toList()}');
+		  }
+		  
+		  // Refreshuj i task locations cache
+		  _cachedTasks = null;
+		  _cachedSortedTasks = null;
+		  
+		  await _loadTaskData();
+		} else if (result == true) {
+		  // Normalna promena task-a (ne konverzija)
+		  await _loadTaskData();
+		}
 	  }
 	}
 
