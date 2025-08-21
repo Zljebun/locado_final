@@ -20,6 +20,7 @@ import 'package:flutter/services.dart';
 import '../widgets/osm_map_widget.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'dart:io';
+import 'dart:async';
 
 
 // Enum for map provider selection
@@ -99,6 +100,10 @@ class _TaskDetailScreenState extends State<TaskDetailScreen>
   // Map interaction state
   bool _isLocationSelectionMode = false;
   bool _mapExpanded = false;
+  
+  double _normalBottomSheetHeight = 0.6;
+  bool _isInLocationSelectionMode = false;
+  
 
   @override
   void initState() {
@@ -1695,6 +1700,43 @@ class _TaskDetailScreenState extends State<TaskDetailScreen>
 					  tooltip: 'Navigate to Task',
 					),
 				  ),
+				  // Location selection overlay
+					if (_isInLocationSelectionMode)
+					  Positioned(
+						top: 20,
+						left: 20,
+						right: 20,
+						child: Container(
+						  padding: EdgeInsets.all(12),
+						  decoration: BoxDecoration(
+							color: Colors.blue.withOpacity(0.9),
+							borderRadius: BorderRadius.circular(8),
+							boxShadow: [
+							  BoxShadow(
+								color: Colors.black26,
+								blurRadius: 4,
+								offset: Offset(0, 2),
+							  ),
+							],
+						  ),
+						  child: Row(
+							children: [
+							  Icon(Icons.location_searching, color: Colors.white, size: 20),
+							  SizedBox(width: 8),
+							  Expanded(
+								child: Text(
+								  'Location Selection Mode - Long press to select',
+								  style: TextStyle(color: Colors.white, fontWeight: FontWeight.w500),
+								),
+							  ),
+							  GestureDetector(
+								onTap: _toggleLocationSelectionMode,
+								child: Icon(Icons.close, color: Colors.white, size: 20),
+							  ),
+							],
+						  ),
+						),
+					  ),
                ],
              ),
            ),
@@ -1967,16 +2009,49 @@ class _TaskDetailScreenState extends State<TaskDetailScreen>
    );
  }
  
-	 void _toggleLocationSelectionMode() {
+	void _toggleLocationSelectionMode() {
 	  setState(() {
 		_isLocationSelectionMode = !_isLocationSelectionMode;
 		_mapExpanded = _isLocationSelectionMode;
 		
 		if (_isLocationSelectionMode) {
-		  // Hide current marker temporarily
+		  // Sačuvaj trenutnu visinu
+		  _normalBottomSheetHeight = _bottomSheetHeight;
+		  _isInLocationSelectionMode = true;
+		  
+		  // Spusti bottom sheet na minimum
+		  _bottomSheetHeight = _minBottomSheetHeight;
+		  _updateMapCenterForBottomSheet();
+		  
+		  // Sakrij markere
 		  _clearMapMarkers();
+		  
+		  // Prikaži poruku
+		  ScaffoldMessenger.of(context).showSnackBar(
+			SnackBar(
+			  content: Row(
+				children: [
+				  Icon(Icons.touch_app, color: Colors.white),
+				  SizedBox(width: 8),
+				  Expanded(child: Text('Long press on map to select new location')),
+				],
+			  ),
+			  backgroundColor: Colors.blue,
+			  duration: Duration(seconds: 3),
+			  action: SnackBarAction(
+				label: 'Cancel',
+				textColor: Colors.white,
+				onPressed: () => _toggleLocationSelectionMode(),
+			  ),
+			),
+		  );
 		} else {
-		  // Restore markers
+		  // Vrati na originalnu visinu
+		  _isInLocationSelectionMode = false;
+		  _bottomSheetHeight = _normalBottomSheetHeight;
+		  _updateMapCenterForBottomSheet();
+		  
+		  // Vrati markere
 		  _updateMapMarkers();
 		}
 	  });
