@@ -11,6 +11,11 @@ import 'dart:convert';
 import 'package:path_provider/path_provider.dart';
 import '../screens/event_details_screen.dart';
 import 'package:flutter/services.dart';
+import 'package:locado_final/models/task_location.dart';
+import 'package:locado_final/services/geofencing_integration_helper.dart';
+import 'package:flutter_map/flutter_map.dart' as osm;
+import 'package:latlong2/latlong.dart' as ll;
+import '../widgets/osm_map_widget.dart';
 
 class GeneralTaskDetailScreen extends StatefulWidget {
   final GeneralTask generalTask;
@@ -38,6 +43,12 @@ class _GeneralTaskDetailScreenState extends State<GeneralTaskDetailScreen> {
   DateTime? _scheduledDate;
   TimeOfDay? _scheduledTime;
   CalendarEvent? _linkedCalendarEvent;
+  
+  // Map interaction state
+  bool _isLocationSelectionMode = false;
+  bool _mapExpanded = false;
+  
+  final ScrollController _scrollController = ScrollController();
 
   @override
   void initState() {
@@ -61,6 +72,7 @@ class _GeneralTaskDetailScreenState extends State<GeneralTaskDetailScreen> {
 
   @override
   void dispose() {
+    _scrollController.dispose();
     _titleController.dispose();
     _newItemController.dispose();
     _newItemFocusNode.dispose();
@@ -122,6 +134,14 @@ class _GeneralTaskDetailScreenState extends State<GeneralTaskDetailScreen> {
         _hasChanges = true;
       });
     }
+  }
+  
+  void _scrollToMap() {
+    _scrollController.animateTo(
+      200.0, // Scroll position
+      duration: Duration(milliseconds: 500),
+      curve: Curves.easeInOut,
+    );
   }
 
   Future<void> _selectScheduledTime() async {
@@ -837,49 +857,117 @@ Open this file with Locado app to import the task!''',
         ),
         body: Column(
           children: [
-            // No location banner
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: Colors.orange.shade50,
-                border: Border(
-                  bottom: BorderSide(color: Colors.orange.shade200, width: 1),
-                ),
-              ),
-              child: Row(
-                children: [
-                  Icon(Icons.location_off, color: Colors.orange.shade600, size: 20),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          'General Task (No Location)',
-                          style: TextStyle(
-                            fontSize: 14,
-                            fontWeight: FontWeight.bold,
-                            color: Colors.orange.shade700,
-                          ),
-                        ),
-                        Text(
-                          'This task can be completed anywhere',
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: Colors.orange.shade600,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ),
+				// Interactive location banner
+				Container(
+				  width: double.infinity,
+				  padding: const EdgeInsets.all(16),
+				  decoration: BoxDecoration(
+					color: _isLocationSelectionMode ? Colors.blue.shade50 : Colors.orange.shade50,
+					border: Border(
+					  bottom: BorderSide(
+						color: _isLocationSelectionMode ? Colors.blue.shade200 : Colors.orange.shade200, 
+						width: 1
+					  ),
+					),
+				  ),
+				  child: Row(
+					children: [
+					  Icon(
+						_isLocationSelectionMode ? Icons.location_searching : Icons.location_off,
+						color: _isLocationSelectionMode ? Colors.blue.shade600 : Colors.orange.shade600,
+						size: 20,
+					  ),
+					  const SizedBox(width: 8),
+					  Expanded(
+						child: Column(
+						  crossAxisAlignment: CrossAxisAlignment.start,
+						  children: [
+							Text(
+							  _isLocationSelectionMode 
+								? 'Select Location on Map'
+								: 'General Task (No Location)',
+							  style: TextStyle(
+								fontSize: 14,
+								fontWeight: FontWeight.bold,
+								color: _isLocationSelectionMode 
+								  ? Colors.blue.shade700 
+								  : Colors.orange.shade700,
+							  ),
+							),
+							Text(
+							  _isLocationSelectionMode
+								? 'Long press on the map below to add a location'
+								: 'This task can be completed anywhere',
+							  style: TextStyle(
+								fontSize: 12,
+								color: _isLocationSelectionMode 
+								  ? Colors.blue.shade600 
+								  : Colors.orange.shade600,
+							  ),
+							),
+						  ],
+						),
+					  ),
+					  if (_isLocationSelectionMode)
+						TextButton(
+						  onPressed: _toggleLocationSelectionMode,
+						  child: Text('Cancel'),
+						),
+					],
+				  ),
+				),
+				
+				if (_isLocationSelectionMode)
+				  const SizedBox(height: 16), // Dodaj spacing
+
+				if (_isLocationSelectionMode)
+				  Container(
+					height: MediaQuery.of(context).size.height * 0.7,
+					child: Stack(
+					  children: [
+						// Map widget
+						OSMMapWidget(
+						  initialCameraPosition: OSMCameraPosition(
+							target: ll.LatLng(48.2082, 16.3738),
+							zoom: 12.0,
+						  ),
+						  markers: const {},
+						  onMapCreated: (controller) {
+							WidgetsBinding.instance.addPostFrameCallback((_) {
+								  _scrollToMap();
+								});
+						  },
+						  onLongPress: _onMapLongPress,
+						  myLocationEnabled: true,
+						  myLocationButtonEnabled: true,
+						),
+						
+						// Instructions overlay
+						Positioned(
+						  top: 16,
+						  left: 16,
+						  right: 16,
+						  child: Container(
+							padding: const EdgeInsets.all(12),
+							decoration: BoxDecoration(
+							  color: Colors.blue.shade100,
+							  borderRadius: BorderRadius.circular(8),
+							),
+							child: Text(
+							  'Long press anywhere on the map to set task location',
+							  style: TextStyle(color: Colors.blue.shade800),
+							  textAlign: TextAlign.center,
+							),
+						  ),
+						),
+					  ],
+					),
+				  ),
 
             // Task detail form
             Expanded(
               child: SingleChildScrollView(
+			    controller: _scrollController,
                 padding: const EdgeInsets.all(16.0),
                 child: Column(
                   children: [
@@ -922,6 +1010,16 @@ Open this file with Locado app to import the task!''',
                                       ? 'View Schedule'
                                       : 'Add Schedule',
                                 ),
+								
+								// Location button
+								IconButton(
+								  onPressed: _toggleLocationSelectionMode,
+								  icon: Icon(
+									_isLocationSelectionMode ? Icons.location_searching : Icons.add_location,
+									color: _isLocationSelectionMode ? Colors.red : Colors.blue,
+								  ),
+								  tooltip: _isLocationSelectionMode ? 'Cancel Selection' : 'Add Location',
+								),
 
                                 // Color picker button
                                 IconButton(
@@ -1083,4 +1181,51 @@ Open this file with Locado app to import the task!''',
      ),
    );
  }
+ 
+	void _toggleLocationSelectionMode() {
+	  print('Location button pressed! Current mode: $_isLocationSelectionMode');
+	  setState(() {
+		_isLocationSelectionMode = !_isLocationSelectionMode;
+		_mapExpanded = _isLocationSelectionMode;
+	  });
+	  print('New mode: $_isLocationSelectionMode');
+	}
+
+	Future<void> _convertToTaskLocation(double latitude, double longitude) async {
+	  // Convert GeneralTask to TaskLocation
+	  final taskLocation = TaskLocation(
+		title: widget.generalTask.title,
+		taskItems: widget.generalTask.taskItems,
+		colorHex: widget.generalTask.colorHex,
+		latitude: latitude,
+		longitude: longitude,
+		scheduledDateTime: widget.generalTask.scheduledDateTime,
+	  );
+	  
+	  // Save new TaskLocation
+	  final taskId = await DatabaseHelper.instance.addTaskLocation(taskLocation);
+	  
+	  // Add geofencing
+	  final helper = GeofencingIntegrationHelper.instance;
+	  if (helper.isInitialized && helper.isServiceRunning) {
+		final taskWithId = taskLocation.copyWith(id: taskId);
+		await helper.addTaskLocationGeofence(taskWithId);
+	  }
+	  
+	  // Delete old GeneralTask
+	  await DatabaseHelper.instance.deleteGeneralTask(widget.generalTask.id!);
+	  
+	  ScaffoldMessenger.of(context).showSnackBar(
+		SnackBar(content: Text('Task converted to location-based task')),
+	  );
+	  
+	  Navigator.pop(context, {
+		  'action': 'converted', 
+		  'originalTaskId': widget.generalTask.id
+		});
+	}
+	
+	void _onMapLongPress(ll.LatLng tappedPoint) {
+	  _convertToTaskLocation(tappedPoint.latitude, tappedPoint.longitude);
+	}
 }

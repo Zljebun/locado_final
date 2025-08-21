@@ -180,6 +180,11 @@ class GeofencingIntegrationHelper {
 		final taskLocations = await DatabaseHelper.instance.getAllTaskLocations();
 
 		if (taskLocations.isEmpty) return;
+		
+		final tasksWithLocation = taskLocations.where((task) => 
+        task.latitude != null && task.longitude != null).toList();
+
+        if (tasksWithLocation.isEmpty) return;
 
 		// 🚀 BATCH PROCESSING - PRAVI BATCH!
 		await LocadoBackgroundService.syncTaskLocationGeofences(taskLocations);
@@ -370,7 +375,12 @@ class GeofencingIntegrationHelper {
       //GeofencingIntegrationHelper:('GeofencingIntegrationHelper: Service not running');
       return false;
     }
-
+	
+	  if (taskLocation.latitude == null || taskLocation.longitude == null) {
+		print('Skipping geofence for task without location: ${taskLocation.title}');
+		return true; 
+	  }
+  
     try {
       final result = await LocadoBackgroundService.addTaskLocationGeofence(taskLocation);
       if (result) {

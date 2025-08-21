@@ -394,20 +394,25 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
 	List<TaskWithDistance> _calculateDistancesSync(List<TaskLocation> tasks, Position position) {
 	  final tasksWithDistance = <TaskWithDistance>[];
 	  
-	  for (final task in tasks) {
-		try {
-		  final distance = _calculateDistance(
-			position.latitude,
-			position.longitude,
-			task.latitude!,
-			task.longitude!,
-		  );
-		  tasksWithDistance.add(TaskWithDistance(task, distance));
-		} catch (e) {
-		  print('❌ Distance calc error for ${task.title}: $e');
-		  tasksWithDistance.add(TaskWithDistance(task, 999999.0));
+		for (final task in tasks) {
+		  try {
+			if (task.hasLocation) {  // DODAJ OVU LINIJU
+			  final distance = _calculateDistance(
+				position.latitude,
+				position.longitude,
+				task.latitude!,
+				task.longitude!,
+			  );
+			  tasksWithDistance.add(TaskWithDistance(task, distance));
+			} else {
+			  // Skip tasks without location or add with max distance
+			  tasksWithDistance.add(TaskWithDistance(task, double.infinity));
+			}
+		  } catch (e) {
+			print('❌ Distance calc error for ${task.title}: $e');
+			tasksWithDistance.add(TaskWithDistance(task, 999999.0));
+		  }
 		}
-	  }
 	  
 	  // Sort by distance
 	  tasksWithDistance.sort((a, b) => a.distance.compareTo(b.distance));
@@ -1182,6 +1187,26 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
               ],
             ),
           ),
+		  
+		// Task list
+		ElevatedButton(
+		  onPressed: () async {
+			print('MANUAL RELOAD: Force refreshing general tasks');
+			setState(() {
+			  _cachedGeneralTasks = null;
+			  _isLoadingGeneralTasks = true;
+			});
+			
+			final freshTasks = await DatabaseHelper.instance.getAllGeneralTasks();
+			print('MANUAL RELOAD: Found ${freshTasks.length} general tasks in database');
+			
+			setState(() {
+			  _cachedGeneralTasks = freshTasks;
+			  _isLoadingGeneralTasks = false;
+			});
+		  },
+		  child: Text('Force Reload General Tasks'),
+		),
 
         // Task list
 		Expanded(
@@ -1670,19 +1695,51 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
 	void _openTaskDetail(TaskLocation task) async {
 	  print('🔄 OPEN TASK DETAIL: Opening task: ${task.title}');
 	  
-	  final result = await Navigator.push(
-		context,
-		MaterialPageRoute(
-		  builder: (ctx) => TaskDetailScreen(taskLocation: task),
-		),
-	  );
+	  if (task.hasLocation) {
+		// Task sa lokacijom - otvori TaskDetailScreen
+		final result = await Navigator.push(
+		  context,
+		  MaterialPageRoute(
+			builder: (ctx) => TaskDetailScreen(taskLocation: task),
+		  ),
+		);
 
-	  print('🔄 OPEN TASK DETAIL: Returned with result: $result');
+		if (result != null) {
+		  await _loadTaskData();
+		}
+	  } else {
+		// Task bez lokacije - konvertuj u GeneralTask i otvori GeneralTaskDetailScreen
+		print('🔄 CONVERTING: TaskLocation without coordinates to GeneralTask');
+		
+		final convertedGeneralTask = GeneralTask(  // PROMENI IME VARIJABLE
+		  id: task.id,
+		  title: task.title,
+		  taskItems: List<String>.from(task.taskItems),
+		  colorHex: task.colorHex,
+		  scheduledDateTime: task.scheduledDateTime,
+		  linkedCalendarEventId: task.linkedCalendarEventId,
+		);
+		
+		final result = await Navigator.push(
+		  context,
+		  MaterialPageRoute(
+			builder: (ctx) => GeneralTaskDetailScreen(generalTask: convertedGeneralTask), // KORISTI NOVO IME
+		  ),
+		);
 
-	  if (result != null) {
-		print('🔄 OPEN TASK DETAIL: Result is not null, reloading task data...');
-		// Reload task data instead of just calling setState
-		await _loadTaskData();
+		if (result != null && result is Map && result['action'] == 'converted') {
+		  // Eksplicitno ukloni konvertovani task iz cache-a
+		  if (_cachedGeneralTasks != null) {
+			final convertedTaskId = result['originalTaskId']; // Dodaj ovo u result
+			_cachedGeneralTasks!.removeWhere((task) => task.id == convertedTaskId);
+		  }
+		  
+		  // Refreshuj i task locations cache
+		  _cachedTasks = null;
+		  _cachedSortedTasks = null;
+		  
+		  await _loadTaskData();
+		}
 	  }
 	}
 
