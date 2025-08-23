@@ -2,7 +2,7 @@
     xmlns:tools="http://schemas.android.com/tools"
     package="com.example.locado_final">
 
-    <!-- POSTOJEĆI LOCADO PERMISSIONS -->
+    <!-- POSTOJECI LOCADO PERMISSIONS -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.TURN_SCREEN_ON" />
     <uses-permission android:name="android.permission.SHOW_WHEN_LOCKED" />
@@ -33,6 +33,7 @@
     <uses-permission android:name="android.permission.ACCESS_NOTIFICATION_POLICY" />
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
 
     <!-- DEVICE FEATURES -->
     <uses-feature
@@ -73,7 +74,7 @@
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
 
-            <!-- ✅ NOVO: INTENT FILTER ZA .LOCADO FAJLOVE -->
+            <!-- NOVO: INTENT FILTER ZA .LOCADO FAJLOVE -->
             <intent-filter android:autoVerify="true" android:priority="1000">
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
@@ -86,7 +87,7 @@
                 <data android:host="*" />
             </intent-filter>
 
-            <!-- ✅ NOVO: INTENT FILTER ZA CONTENT URI (dijeljanje preko aplikacija) -->
+            <!-- NOVO: INTENT FILTER ZA CONTENT URI (dijeljanje preko aplikacija) -->
             <intent-filter android:autoVerify="true" android:priority="1000">
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
@@ -98,7 +99,7 @@
                 <data android:pathPattern=".*\\.locado" />
             </intent-filter>
 
-            <!-- ✅ NOVO: INTENT FILTER ZA CUSTOM MIME TYPE -->
+            <!-- NOVO: INTENT FILTER ZA CUSTOM MIME TYPE -->
             <intent-filter android:autoVerify="true" android:priority="1000">
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
@@ -106,7 +107,7 @@
                 <data android:mimeType="application/x-locado" />
             </intent-filter>
 
-            <!-- ✅ NOVO: INTENT FILTER ZA GENERIC APPLICATION/OCTET-STREAM -->
+            <!-- NOVO: INTENT FILTER ZA GENERIC APPLICATION/OCTET-STREAM -->
             <intent-filter android:autoVerify="true" android:priority="999">
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
@@ -117,7 +118,7 @@
 
         </activity>
 
-        <!-- POSTOJEĆA FULL SCREEN ACTIVITY -->
+        <!-- POSTOJECA FULL SCREEN ACTIVITY -->
         <activity
             android:name=".FullScreenAlertActivity"
             android:theme="@android:style/Theme.NoTitleBar.Fullscreen"
@@ -127,7 +128,7 @@
             android:turnScreenOn="true"
             android:exported="false" />
 
-        <!-- POBOLJŠANA LOCK SCREEN TASK ACTIVITY -->
+        <!-- POBOLJSANA LOCK SCREEN TASK ACTIVITY -->
         <activity
             android:name=".LockScreenTaskActivity"
             android:theme="@style/LockScreenTaskTheme"
@@ -177,9 +178,9 @@
             android:name="com.google.android.geo.API_KEY"
             android:value="${googleMapsApiKey}" />
 			
-	    <meta-data
-			android:name="com.huawei.hms.location.LocationService"
-			android:value="true" />
+        <meta-data
+            android:name="com.huawei.hms.location.LocationService"
+            android:value="true" />
 
         <!-- FOREGROUND SERVICE -->
         <service
@@ -190,6 +191,13 @@
             android:stopWithTask="false"
             android:directBootAware="true" />
 
+        <!-- NEW: ALARM NOTIFICATION SERVICE -->
+        <service
+            android:name=".AlarmNotificationService"
+            android:enabled="true"
+            android:exported="false"
+            android:stopWithTask="false" />
+
         <!-- BROADCAST RECEIVER ZA GEOFENCE EVENTS -->
         <receiver
             android:name=".GeofenceBroadcastReceiver"
@@ -198,6 +206,17 @@
             android:directBootAware="true">
             <intent-filter android:priority="1000">
                 <action android:name="com.google.android.gms.location.Geofence" />
+            </intent-filter>
+        </receiver>
+
+        <!-- NEW: ALARM RECEIVER FOR SCHEDULED NOTIFICATIONS -->
+        <receiver
+            android:name=".AlarmReceiver"
+            android:enabled="true"
+            android:exported="false"
+            android:directBootAware="true">
+            <intent-filter android:priority="1000">
+                <action android:name="com.example.locado_final.SCHEDULED_NOTIFICATION" />
             </intent-filter>
         </receiver>
 
@@ -285,7 +304,7 @@
             <action android:name="android.settings.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
         </intent>
         
-        <!-- ✅ NOVO: QUERIES ZA .LOCADO FAJLOVE -->
+        <!-- NOVO: QUERIES ZA .LOCADO FAJLOVE -->
         <intent>
             <action android:name="android.intent.action.VIEW" />
             <data android:mimeType="application/x-locado" />

@@ -34,6 +34,7 @@ class MainActivity: FlutterActivity() {
     }
 
     private lateinit var geofenceManager: GeofenceManager
+	private lateinit var alarmManagerHelper: AlarmManagerHelper
     
     // FileIntentPlugin instance
     private var fileIntentPlugin: FileIntentPlugin? = null
@@ -48,6 +49,19 @@ class MainActivity: FlutterActivity() {
         fileIntentPlugin = FileIntentPlugin(this)
         fileIntentPlugin?.setupChannel(flutterEngine)
         android.util.Log.d(TAG, "✅ FileIntentPlugin configured")
+		
+		// Setup AlarmManagerHelper for scheduled notifications
+        try {
+            alarmManagerHelper = AlarmManagerHelper(this)
+            val alarmMethodChannel = MethodChannel(
+                flutterEngine.dartExecutor.binaryMessenger, 
+                AlarmManagerHelper.CHANNEL_NAME
+            )
+            alarmManagerHelper.registerWith(alarmMethodChannel)
+            Log.d(TAG, "✅ AlarmManagerHelper configured successfully")
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Failed to setup AlarmManagerHelper: ${e.message}")
+        }
 
         // Setup event channel for Flutter UI updates (optional)
         EventChannel(flutterEngine.dartExecutor.binaryMessenger, EVENT_CHANNEL)

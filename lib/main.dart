@@ -238,6 +238,9 @@ class _BootstrapAwareMainScreenState extends State<BootstrapAwareMainScreen> {
       try {
         await initializeNotifications();
         print('✅ BACKGROUND: Notifications initialized');
+		
+		await NotificationService.initializeCalendarNotifications();
+        print('✅ BACKGROUND: Calendar notifications initialized');
       } catch (e) {
         print('⚠️ BACKGROUND: Notification error: $e');
       }
