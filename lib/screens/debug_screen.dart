@@ -7,6 +7,8 @@ import 'dart:async';
 import 'dart:io';
 import 'package:path_provider/path_provider.dart';
 import '../services/onboarding_service.dart';
+import 'package:locado_final/screens/notification_service.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
 class DebugScreen extends StatefulWidget {
   @override
@@ -224,6 +226,39 @@ class _DebugScreenState extends State<DebugScreen> {
       ),
     );
   }
+  
+	Future<void> _testImmediateNotification() async {
+	  try {
+		await flutterLocalNotificationsPlugin.show(
+		  999,
+		  'Test Notification',
+		  'This is immediate test notification',
+		  const NotificationDetails(
+			android: AndroidNotificationDetails(
+			  'calendar_reminder_channel',
+			  'Calendar Reminders',
+			  importance: Importance.max,
+			  priority: Priority.high,
+			),
+		  ),
+		);
+		print('Test notification sent');
+	  } catch (e) {
+		print('Error sending test notification: $e');
+	  }
+	}
+
+	Future<void> _checkPendingNotifications() async {
+	  try {
+		final pending = await NotificationService.getPendingNotifications();
+		print('Pending notifications: ${pending.length}');
+		for (final notification in pending) {
+		  print('ID: ${notification.id}, Title: ${notification.title}');
+		}
+	  } catch (e) {
+		print('Error checking pending notifications: $e');
+	  }
+	}
 
   Future<void> _shareLogFile() async {
     try {
@@ -563,94 +598,66 @@ class _DebugScreenState extends State<DebugScreen> {
             SizedBox(height: 16),
 
             // Battery Optimization Section
-            _buildSectionCard(
-              title: '🔋 Battery Optimization',
-              children: [
-                _buildStatusRow(
-                    'Status',
-                    _isBatteryWhitelisted ? 'WHITELISTED ✅' : 'NOT WHITELISTED ❌'
-                ),
-                _buildStatusRow('Android Version', 'API $_androidVersion'),
-                _buildStatusRow('Can Request', _canRequestWhitelist ? 'YES' : 'NO'),
-                SizedBox(height: 12),
-                Row(
-                  children: [
-                    Expanded(
-                      child: ElevatedButton.icon(
-                        onPressed: _isBatteryLoading ? null : _checkBatteryOptimization,
-                        icon: _isBatteryLoading
-                            ? SizedBox(
-                            width: 16,
-                            height: 16,
-                            child: CircularProgressIndicator(strokeWidth: 2)
-                        )
-                            : Icon(Icons.refresh),
-                        label: Text('Check Status'),
-                        style: ElevatedButton.styleFrom(backgroundColor: Colors.blue),
-                      ),
-                    ),
-                    SizedBox(width: 8),
-                    Expanded(
-                      child: ElevatedButton.icon(
-                        onPressed: (_isBatteryLoading || _isBatteryWhitelisted || !_canRequestWhitelist)
-                            ? null
-                            : _requestBatteryOptimizationWhitelist,
-                        icon: Icon(Icons.security),
-                        label: Text(_isBatteryWhitelisted ? 'Whitelisted' : 'Request'),
-                        style: ElevatedButton.styleFrom(
-                            backgroundColor: _isBatteryWhitelisted
-                                ? Colors.green
-                                : Colors.orange
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-                SizedBox(height: 8),
-                SizedBox(
-                  width: double.infinity,
-                  child: ElevatedButton.icon(
-                    onPressed: _showBatteryOptimizationInfo,
-                    icon: Icon(Icons.info_outline),
-                    label: Text('Why This Matters'),
-                    style: ElevatedButton.styleFrom(backgroundColor: Colors.indigo),
-                  ),
-                ),
-                SizedBox(height: 12),
-                Container(
-                  padding: EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: _isBatteryWhitelisted ? Colors.green.shade50 : Colors.red.shade50,
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(
-                      color: _isBatteryWhitelisted ? Colors.green : Colors.red,
-                      width: 1,
-                    ),
-                  ),
-                  child: Row(
-                    children: [
-                      Icon(
-                        _isBatteryWhitelisted ? Icons.check_circle : Icons.warning,
-                        color: _isBatteryWhitelisted ? Colors.green : Colors.red,
-                        size: 20,
-                      ),
-                      SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          _isBatteryWhitelisted
-                              ? 'Your app is optimized for reliable geofencing!'
-                              : 'Geofencing may not work when phone is locked. Please whitelist this app.',
-                          style: TextStyle(
-                            color: _isBatteryWhitelisted ? Colors.green.shade800 : Colors.red.shade800,
-                            fontSize: 12,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
+				// Manual Tests Section
+				_buildSectionCard(
+				  title: '🧪 Manual Tests',
+				  children: [
+					Row(
+					  children: [
+						Expanded(
+						  child: ElevatedButton.icon(
+							onPressed: _testNotification,
+							icon: Icon(Icons.notifications),
+							label: Text('Test Notification'),
+							style: ElevatedButton.styleFrom(backgroundColor: Colors.orange),
+						  ),
+						),
+						SizedBox(width: 8),
+						Expanded(
+						  child: ElevatedButton.icon(
+							onPressed: _simulateGeofence,
+							icon: Icon(Icons.location_on),
+							label: Text('Simulate Geofence'),
+							style: ElevatedButton.styleFrom(backgroundColor: Colors.purple),
+						  ),
+						),
+					  ],
+					),
+					SizedBox(height: 8),
+					// Nova dugmad za testiranje notifikacija
+					Row(
+					  children: [
+						Expanded(
+						  child: ElevatedButton.icon(
+							onPressed: _testImmediateNotification,
+							icon: Icon(Icons.notification_add),
+							label: Text('Test Immediate'),
+							style: ElevatedButton.styleFrom(backgroundColor: Colors.blue),
+						  ),
+						),
+						SizedBox(width: 8),
+						Expanded(
+						  child: ElevatedButton.icon(
+							onPressed: _checkPendingNotifications,
+							icon: Icon(Icons.pending_actions),
+							label: Text('Check Pending'),
+							style: ElevatedButton.styleFrom(backgroundColor: Colors.indigo),
+						  ),
+						),
+					  ],
+					),
+					SizedBox(height: 8),
+					SizedBox(
+					  width: double.infinity,
+					  child: ElevatedButton.icon(
+						onPressed: _checkService,
+						icon: Icon(Icons.health_and_safety),
+						label: Text('Check Service'),
+						style: ElevatedButton.styleFrom(backgroundColor: Colors.teal),
+					  ),
+					),
+				  ],
+				),
             SizedBox(height: 16),
 
             // Current Status Section

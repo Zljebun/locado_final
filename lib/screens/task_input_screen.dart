@@ -11,6 +11,13 @@ import 'search_location_screen.dart';
 import '../services/geofencing_integration_helper.dart';
 import '../widgets/osm_map_widget.dart';
 import 'package:locado_final/models/general_task.dart';
+import 'package:timezone/timezone.dart' as tz;
+import 'package:flutter/foundation.dart'; 
+import 'package:flutter/foundation.dart'; 
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:locado_final/models/calendar_event.dart';
+import 'dart:developer' as developer;
 
 // Enum for map provider selection
 enum MapProvider { googleMaps, openStreetMap }
@@ -615,6 +622,7 @@ class _TaskInputScreenState extends State<TaskInputScreen> {
 
       // 2. Create calendar event if scheduled
       if (scheduledDateTime != null) {
+	    debugPrint('🔔 ENTERING scheduled block with time: $scheduledDateTime');
         final calendarEvent = CalendarEvent(
           title: taskLocation.generateCalendarEventTitle(),
           description: taskLocation.generateCalendarEventDescription(),
@@ -631,9 +639,15 @@ class _TaskInputScreenState extends State<TaskInputScreen> {
 
         // Schedule notifications
         final eventWithId = calendarEvent.copyWith(id: eventId);
-        await NotificationService.scheduleEventReminders(eventWithId);
+		print('🔔 BEFORE calling scheduleEventReminders');
+		try {
+          await NotificationService.scheduleEventReminders(eventWithId);
+		  print('🔔 AFTER calling scheduleEventReminders');
+		} catch (e) {
+		  print('🔔 ERROR in scheduleEventReminders: $e');
+		}
 
-        debugPrint('✅ Created linked calendar event: ${calendarEvent.title}');
+        print('✅ Created linked calendar event: ${calendarEvent.title}');
 
         // Show scheduling success message
         if (mounted) {
@@ -1708,6 +1722,7 @@ class _TaskInputScreenWithStateState extends State<TaskInputScreenWithState> {
 		
 		// Calendar event creation (same as before)
 		if (scheduledDateTime != null) {
+		  debugPrint('🔔 ENTERING scheduled block with time: $scheduledDateTime');
 		  final calendarEvent = CalendarEvent(
 			title: taskLocation.generateCalendarEventTitle(),
 			description: taskLocation.generateCalendarEventDescription(),
@@ -1721,9 +1736,11 @@ class _TaskInputScreenWithStateState extends State<TaskInputScreenWithState> {
 		  await DatabaseHelper.instance.linkTaskToCalendarEvent(taskId, eventId);
 
 		  final eventWithId = calendarEvent.copyWith(id: eventId);
+		  print('🔔 BEFORE calling scheduleEventReminders');
 		  await NotificationService.scheduleEventReminders(eventWithId);
+		  print('🔔 AFTER calling scheduleEventReminders');
 
-		  debugPrint('✅ Created linked calendar event: ${calendarEvent.title}');
+		  print('✅ Created linked calendar event: ${calendarEvent.title}');
 
 		  if (mounted) {
 			ScaffoldMessenger.of(context).showSnackBar(
@@ -1771,6 +1788,7 @@ class _TaskInputScreenWithStateState extends State<TaskInputScreenWithState> {
 		
 		// Calendar event creation for general tasks
 		if (scheduledDateTime != null) {
+		  debugPrint('🔔 ENTERING scheduled block with time: $scheduledDateTime');
 		  final calendarEvent = CalendarEvent(
 			title: generalTask.generateCalendarEventTitle(),
 			description: generalTask.generateCalendarEventDescription(),
@@ -1782,9 +1800,15 @@ class _TaskInputScreenWithStateState extends State<TaskInputScreenWithState> {
 
 		  final eventId = await DatabaseHelper.instance.addCalendarEvent(calendarEvent);
 		  await DatabaseHelper.instance.linkGeneralTaskToCalendarEvent(taskId, eventId);
+		  
+		    debugPrint('📅 About to schedule notifications for event: ${calendarEvent.title}');
+            debugPrint('📅 Event time: ${scheduledDateTime}');
+            debugPrint('📅 Reminder minutes: ${calendarEvent.reminderMinutes}');
 
 		  final eventWithId = calendarEvent.copyWith(id: eventId);
+		  debugPrint('📅 Calling NotificationService.scheduleEventReminders...');
 		  await NotificationService.scheduleEventReminders(eventWithId);
+		  debugPrint('📅 scheduleEventReminders completed');
 
 		  debugPrint('✅ Created linked calendar event for general task: ${calendarEvent.title}');
 
