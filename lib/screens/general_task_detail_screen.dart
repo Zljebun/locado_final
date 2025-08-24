@@ -510,10 +510,19 @@ class _GeneralTaskDetailScreenState extends State<GeneralTaskDetailScreen> {
     }
   }
 
-  void _deleteEntireTask() async {
-    await DatabaseHelper.instance.deleteGeneralTask(widget.generalTask.id!);
-    Navigator.pop(context, true);
-  }
+	void _deleteEntireTask() async {
+	  // Since this GeneralTask might actually be a TaskLocation with null coordinates,
+	  // try to delete from both tables to be safe
+	  try {
+		await DatabaseHelper.instance.deleteTaskLocation(widget.generalTask.id!);
+		print('Deleted as TaskLocation (converted general task)');
+	  } catch (e) {
+		print('Not found in TaskLocation table, trying GeneralTask table: $e');
+		await DatabaseHelper.instance.deleteGeneralTask(widget.generalTask.id!);
+		print('Deleted as GeneralTask');
+	  }
+	  Navigator.pop(context, true);
+	}
 
   void _shareTask() {
     final items = widget.generalTask.taskItems;

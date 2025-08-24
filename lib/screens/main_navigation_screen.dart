@@ -208,6 +208,18 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
 		  _cachedTasks = cachedTasks;
 		  _cachedSortedTasks = cachedTasks.map((task) => TaskWithDistance(task, 0.0)).toList();
 		  
+		  // Step 2b: INSTANT - Load general tasks and calendar events
+		  print('Loading general tasks and calendar events...');
+		  final generalTasks = await DatabaseHelper.instance.getAllGeneralTasks();
+		  final calendarEvents = await DatabaseHelper.instance.getAllCalendarEvents();
+
+		  // FORCE REFRESH: Clear existing cache to ensure fresh data
+		  _cachedGeneralTasks = null;
+		  _cachedCalendarEvents = null;
+
+		  _cachedGeneralTasks = generalTasks;
+		  _cachedCalendarEvents = calendarEvents;
+		  
 		  setState(() {
 			_isLoadingTasks = false;
 			_isLoadingDistance = false;
@@ -262,8 +274,12 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
 			
 			// Check if general tasks or calendar events changed
 			if (!dataChanged) {
-			  dataChanged = _cachedGeneralTasks?.length != freshGeneralTasks.length ||
-						   _cachedCalendarEvents?.length != freshCalendarEvents.length;
+			  final cachedGeneralIds = _cachedGeneralTasks?.map((t) => t.id).toSet() ?? {};
+			  final freshGeneralIds = freshGeneralTasks.map((t) => t.id).toSet();
+			  
+			  dataChanged = !cachedGeneralIds.containsAll(freshGeneralIds) || 
+							!freshGeneralIds.containsAll(cachedGeneralIds) ||
+							_cachedCalendarEvents?.length != freshCalendarEvents.length;
 			}
 			
 			// Only update UI if data actually changed
@@ -2948,9 +2964,7 @@ Future<void> _selectMapProvider(String provider) async {
 	}
 	
 	void _openGeneralTaskDetail(GeneralTask generalTask) async {
-	  print('📄 OPEN GENERAL TASK DETAIL: Opening task: ${generalTask.title}');
-	  print('📄 DEBUG: GeneralTask ID: ${generalTask.id}');
-	  print('📄 DEBUG: Current _cachedGeneralTasks count: ${_cachedGeneralTasks?.length ?? 0}');
+	  print('Opening general task detail: ${generalTask.title}');
 	  
 	  final result = await Navigator.push(
 		context,
@@ -2959,34 +2973,24 @@ Future<void> _selectMapProvider(String provider) async {
 		),
 	  );
 
-	  print('📄 DEBUG: Result from GeneralTaskDetailScreen: $result');
-
 	  if (result != null) {
 		if (result is Map && result['action'] == 'converted') {
-		  print('CONVERSION DEBUG: Task converted, result: $result');
-		  
+		  // Task converted to located task
 		  final convertedTaskId = result['originalTaskId'];
-		  print('CONVERSION DEBUG: originalTaskId from result: $convertedTaskId');
-		  print('CONVERSION DEBUG: generalTask.id: ${generalTask.id}');
 		  
-		  // Eksplicitno ukloni konvertovani task iz cache-a
+		  // Remove from general tasks cache
 		  if (_cachedGeneralTasks != null) {
-			print('CONVERSION DEBUG: General tasks before: ${_cachedGeneralTasks!.length}');
-			print('CONVERSION DEBUG: General task IDs before: ${_cachedGeneralTasks!.map((t) => t.id).toList()}');
-			
 			_cachedGeneralTasks!.removeWhere((task) => task.id == convertedTaskId);
-			
-			print('CONVERSION DEBUG: General tasks after: ${_cachedGeneralTasks!.length}');
-			print('CONVERSION DEBUG: General task IDs after: ${_cachedGeneralTasks!.map((t) => t.id).toList()}');
 		  }
 		  
-		  // Refreshuj i task locations cache
+		  // Refresh all caches
 		  _cachedTasks = null;
 		  _cachedSortedTasks = null;
 		  
 		  await _loadTaskData();
 		} else if (result == true) {
-		  // Normalna promena task-a (ne konverzija)
+		  // Task was modified or deleted - refresh data
+		  print('General task modified/deleted, refreshing data...');
 		  await _loadTaskData();
 		}
 	  }
