@@ -120,6 +120,14 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
   
   bool _isPastCalendarTasksExpanded = false;
   bool _isUpcomingCalendarTasksExpanded = false;
+  
+  Map<String, List<AutocompleteSuggestion>> _suggestionsCache = {};
+  Map<String, DateTime> _cacheTimestamps = {};
+  static const int cacheExpirationMinutes = 30;
+  
+  LatLng? _cachedUserLocation; // Cache user location to avoid repeated calls
+  DateTime? _lastLocationUpdate;
+  String? _currentSearchQuery; // Track current search to prevent racing
 
 
 	@override
@@ -476,13 +484,14 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
 	  return tasksWithDistance;
 	}
 
-	  @override
-	  void dispose() {
-		_searchController.dispose();
-		_searchFocusNode.dispose();
-		_debounceTimer?.cancel();
-		super.dispose();
-	  }
+	@override
+	void dispose() {
+	  _searchController.dispose();
+	  _searchFocusNode.dispose();
+	  _debounceTimer?.cancel();
+	  _cleanupCache();
+	  super.dispose();
+	}
   
 	  void _testTaskListRefresh() {
 	  print('🧪 TEST: Manual task list refresh test');
@@ -507,61 +516,74 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
   }
 
 // Handle search text changes with debounce
-  void _onSearchChanged() {
-    final query = _searchController.text.trim();
+// Update _onSearchChanged to clear current search when text changes
+	void _onSearchChanged() {
+	  final query = _searchController.text.trim();
 
-    // Cancel previous timer
-    _debounceTimer?.cancel();
+	  // Cancel previous timer
+	  _debounceTimer?.cancel();
 
-    if (query.isEmpty) {
-      setState(() {
-        _suggestions.clear();
-        _showSuggestions = false;
-        _isLoadingSuggestions = false;
-      });
-      return;
-    }
+	  if (query.isEmpty) {
+		_currentSearchQuery = null; // Clear current search
+		setState(() {
+		  _suggestions.clear();
+		  _showSuggestions = false;
+		  _isLoadingSuggestions = false;
+		});
+		return;
+	  }
 
-    // Show loading state immediately
-    if (!_isLoadingSuggestions) {
-      setState(() {
-        _isLoadingSuggestions = true;
-        _showSuggestions = true;
-      });
-    }
+	  // Don't show loading state for very short queries
+	  if (query.length < 2) {
+		return;
+	  }
 
-    // Debounce the API call
-    _debounceTimer = Timer(const Duration(milliseconds: 300), () {
-      _fetchAutocompleteSuggestions(query);
-    });
-  }
+	  // Show loading state immediately for queries 2+ characters
+	  setState(() {
+		_isLoadingSuggestions = true;
+		_showSuggestions = true;
+	  });
+
+	  // Reduced debounce time from 300ms to 150ms for better responsiveness
+	  _debounceTimer = Timer(const Duration(milliseconds: 150), () {
+		if (mounted) {
+		  _fetchAutocompleteSuggestions(query);
+		}
+	  });
+	}
 
 // Handle focus changes
-  void _onFocusChanged() {
-    if (!_searchFocusNode.hasFocus && _suggestions.isEmpty) {
-      setState(() {
-        _showSuggestions = false;
-      });
-    } else if (_searchFocusNode.hasFocus && _searchController.text.isNotEmpty) {
-      setState(() {
-        _showSuggestions = true;
-      });
-    }
-  }
+	void _onFocusChanged() {
+	  if (!_searchFocusNode.hasFocus) {
+		// Only hide suggestions if search field is empty
+		if (_searchController.text.isEmpty) {
+		  setState(() {
+			_showSuggestions = false;
+		  });
+		}
+	  } else if (_searchFocusNode.hasFocus && _searchController.text.isNotEmpty) {
+		// Show existing suggestions when refocusing
+		if (_suggestions.isNotEmpty) {
+		  setState(() {
+			_showSuggestions = true;
+		  });
+		}
+	  }
+	}
 
 // Fetch autocomplete suggestions from Google Places API
+// Enhanced _fetchAutocompleteSuggestions with better error handling
 	Future<void> _fetchAutocompleteSuggestions(String query) async {
-	  if (query.isEmpty) return;
+	  if (query.isEmpty || query.length < 2) return;
 
-	  print('🔍 FETCH: Starting hybrid search for: $query');
+	  // Set current search query to prevent racing conditions
+	  _currentSearchQuery = query;
+	  
+	  print('🔍 FETCH: Starting search for: $query');
 
 	  try {
-		// Get current user location for bias
-		LatLng? userLocation;
-		final position = await LocationService.getCurrentLocation();
-		if (position != null) {
-		  userLocation = LatLng(position.latitude, position.longitude);
-		}
+		// Use cached location or get it once per session
+		LatLng? userLocation = await _getCachedUserLocation();
 
 		// Check current map provider
 		final prefs = await SharedPreferences.getInstance();
@@ -570,14 +592,15 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
 		print('🔍 FETCH: Using ${useOSM ? 'OSM' : 'Google'} suggestions API');
 
 		if (useOSM) {
-		  await _fetchNominatimSuggestions(query, userLocation);
+		  await _fetchOptimizedNominatimSuggestions(query, userLocation);
 		} else {
 		  await _fetchGooglePlacesSuggestions(query, userLocation);
 		}
 
 	  } catch (e) {
 		print('❌ FETCH: Exception: $e');
-		if (mounted) {
+		// Only update UI if this is still the current search
+		if (mounted && _currentSearchQuery == query) {
 		  setState(() {
 			_suggestions.clear();
 			_isLoadingSuggestions = false;
@@ -586,6 +609,315 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
 		}
 	  }
 	}
+
+	// New method to cache user location and avoid repeated calls
+	Future<LatLng?> _getCachedUserLocation() async {
+	  final now = DateTime.now();
+	  
+	  // Use cached location if it's less than 5 minutes old
+	  if (_cachedUserLocation != null && 
+		  _lastLocationUpdate != null && 
+		  now.difference(_lastLocationUpdate!).inMinutes < 5) {
+		print('📍 LOCATION: Using cached location');
+		return _cachedUserLocation;
+	  }
+
+	  try {
+		print('📍 LOCATION: Getting fresh location...');
+		final position = await LocationService.getCurrentLocation()
+			.timeout(const Duration(seconds: 1)); // Shorter timeout
+		
+		if (position != null) {
+		  _cachedUserLocation = LatLng(position.latitude, position.longitude);
+		  _lastLocationUpdate = now;
+		  print('📍 LOCATION: Cached new location');
+		}
+		return _cachedUserLocation;
+	  } catch (e) {
+		print('📍 LOCATION: Using fallback (Vienna)');
+		// Use Vienna as fallback
+		_cachedUserLocation = const LatLng(48.2082, 16.3738);
+		_lastLocationUpdate = now;
+		return _cachedUserLocation;
+	  }
+	}
+	
+	Future<void> _fetchOptimizedNominatimSuggestions(String query, LatLng? userLocation) async {
+	  // Check cache first
+	  final cacheKey = '${query.toLowerCase()}_${userLocation?.latitude?.toStringAsFixed(2)}_${userLocation?.longitude?.toStringAsFixed(2)}';
+	  
+	  if (_suggestionsCache.containsKey(cacheKey)) {
+		final cacheTime = _cacheTimestamps[cacheKey];
+		if (cacheTime != null && DateTime.now().difference(cacheTime).inMinutes < cacheExpirationMinutes) {
+		  print('📦 CACHE: Using cached results for: $query');
+		  if (mounted && _currentSearchQuery == query) {
+			setState(() {
+			  _suggestions = _suggestionsCache[cacheKey]!;
+			  _isLoadingSuggestions = false;
+			  _showSuggestions = _suggestions.isNotEmpty;
+			});
+		  }
+		  return;
+		}
+	  }
+
+	  // Default to Vienna if no user location
+	  final double centerLat = userLocation?.latitude ?? 48.2082;
+	  final double centerLng = userLocation?.longitude ?? 16.3738;
+
+	  print('🔍 OSM: Starting single optimized search for: $query');
+
+	  // Single request with better parameters
+	  try {
+		final suggestions = await _performOptimizedNominatimSearch(
+		  query: query,
+		  centerLat: centerLat,
+		  centerLng: centerLng,
+		);
+
+		// Only update UI if this search is still current
+		if (mounted && _currentSearchQuery == query) {
+		  // Cache the results
+		  _suggestionsCache[cacheKey] = suggestions;
+		  _cacheTimestamps[cacheKey] = DateTime.now();
+
+		  setState(() {
+			_suggestions = suggestions;
+			_isLoadingSuggestions = false;
+			_showSuggestions = suggestions.isNotEmpty;
+		  });
+
+		  print('🔍 OSM: Updated UI with ${suggestions.length} suggestions');
+		} else {
+		  print('🔍 OSM: Discarding outdated search results for: $query');
+		}
+
+	  } catch (e) {
+		print('❌ OSM: Search failed: $e');
+		if (mounted && _currentSearchQuery == query) {
+		  setState(() {
+			_suggestions.clear();
+			_isLoadingSuggestions = false;
+			_showSuggestions = false;
+		  });
+		}
+	  }
+	}
+	
+	// Single optimized Nominatim search with better parameters
+	Future<List<AutocompleteSuggestion>> _performOptimizedNominatimSearch({
+	  required String query,
+	  required double centerLat,
+	  required double centerLng,
+	}) async {
+	  
+	  // Simple approach - no POI filtering, no complex logic
+	  final double radiusOffset = 0.1; // 10km radius
+	  final double minLon = centerLng - radiusOffset;
+	  final double maxLat = centerLat + radiusOffset;
+	  final double maxLon = centerLng + radiusOffset;  
+	  final double minLat = centerLat - radiusOffset;
+
+	  // Basic Nominatim request without complex parameters
+	  String url = 'https://nominatim.openstreetmap.org/search'
+		  '?q=${Uri.encodeComponent(query)}'
+		  '&format=json'
+		  '&limit=6'
+		  '&addressdetails=1'
+		  '&viewbox=$minLon,$maxLat,$maxLon,$minLat';
+		  // Removed: bounded=1, extratags=1, namedetails=1, class filters
+
+	  print('🔍 OSM: Basic search (10km radius)');
+
+	  final response = await http.get(
+		Uri.parse(url),
+		headers: {'User-Agent': 'Locado/1.0 (Flutter App)'},
+	  ).timeout(const Duration(seconds: 5)); // Increased timeout
+
+	  if (response.statusCode == 200) {
+		final List<dynamic> results = json.decode(response.body);
+		print('🔍 OSM: Found ${results.length} basic results');
+
+		final List<AutocompleteSuggestion> suggestions = [];
+		
+		for (final result in results) {
+		  try {
+			final displayName = result['display_name'] ?? '';
+			final parts = displayName.split(',');
+			
+			// Simple name extraction
+			String mainText = result['name']?.toString() ?? '';
+			if (mainText.isEmpty && parts.isNotEmpty) {
+			  mainText = parts.first.trim();
+			}
+			
+			// Simple context
+			String? secondaryText;
+			if (parts.length > 1) {
+			  secondaryText = parts.skip(1).take(2).map((s) => s.trim()).join(', ');
+			}
+
+			suggestions.add(
+			  AutocompleteSuggestion(
+				placeId: 'osm_${result['osm_type']}_${result['osm_id']}',
+				description: displayName,
+				mainText: mainText,
+				secondaryText: secondaryText,
+			  ),
+			);
+			
+		  } catch (e) {
+			print('❌ OSM: Error processing result: $e');
+			continue;
+		  }
+		}
+
+		return suggestions;
+	  }
+
+	  throw Exception('HTTP ${response.statusCode}');
+	}
+
+	// New method for individual tiered requests
+	Future<List<AutocompleteSuggestion>> _performTieredNominatimRequest({
+	  required String query,
+	  required double centerLat,
+	  required double centerLng,
+	  required double radiusOffset,
+	  required bool bounded,
+	  required int limit,
+	  required String description,
+	}) async {
+	  
+	  final double minLon = centerLng - radiusOffset;
+	  final double maxLat = centerLat + radiusOffset;
+	  final double maxLon = centerLng + radiusOffset;
+	  final double minLat = centerLat - radiusOffset;
+
+	  String url = 'https://nominatim.openstreetmap.org/search'
+		  '?q=${Uri.encodeComponent(query)}'
+		  '&format=json'
+		  '&limit=$limit'
+		  '&addressdetails=1'
+		  '&namedetails=1'
+		  '&viewbox=$minLon,$maxLat,$maxLon,$minLat'
+		  '&extratags=1';
+
+	  if (bounded) {
+		url += '&bounded=1';
+	  }
+
+	  print('🔍 OSM ($description): Searching radius ~${(radiusOffset * 111).toInt()}km');
+
+	  try {
+		final response = await http.get(
+		  Uri.parse(url),
+		  headers: {'User-Agent': 'Locado/1.0 (Flutter App)'},
+		).timeout(const Duration(seconds: 3));
+
+		if (response.statusCode == 200) {
+		  final List<dynamic> results = json.decode(response.body);
+		  print('🔍 OSM ($description): Found ${results.length} results');
+
+		  if (results.isEmpty) {
+			return [];
+		  }
+
+		  final List<AutocompleteSuggestion> suggestions = [];
+		  
+		  for (final result in results) {
+			try {
+			  final lat = double.parse(result['lat']);
+			  final lng = double.parse(result['lon']);
+			  
+			  // Calculate distance from search center
+			  final distance = _calculateDistanceForSuggestions(
+				centerLat, centerLng, lat, lng
+			  );
+			  
+			  final displayName = result['display_name'] ?? '';
+			  final parts = displayName.split(',');
+
+			  String mainText = _extractBestNameFromNominatim(result);
+			  String? secondaryText;
+			  
+			  if (parts.length > 1) {
+				// For suggestions, show more local context
+				final contextParts = parts.skip(1).take(2).map((s) => s.trim()).toList();
+				secondaryText = contextParts.join(', ');
+				
+				// Add distance info for far results
+				if (distance > 10000) { // > 10km
+				  final distanceText = distance > 1000 
+					? '${(distance / 1000).toStringAsFixed(0)}km'
+					: '${distance.toInt()}m';
+				  secondaryText = '$secondaryText • $distanceText';
+				}
+			  }
+
+			  suggestions.add(
+				AutocompleteSuggestion(
+				  placeId: 'osm_${result['osm_type']}_${result['osm_id']}',
+				  description: displayName,
+				  mainText: mainText,
+				  secondaryText: secondaryText,
+				),
+			  );
+
+			  // Limit results for better UX
+			  if (suggestions.length >= 8) break;
+			  
+			} catch (e) {
+			  print('❌ OSM ($description): Error processing result: $e');
+			  continue;
+			}
+		  }
+
+		  return suggestions;
+		}
+	  } catch (e) {
+		print('❌ OSM ($description): Request failed: $e');
+	  }
+
+	  return [];
+	}
+
+	// New method to filter results by distance
+	List<AutocompleteSuggestion> _filterResultsByDistance(
+	  List<AutocompleteSuggestion> suggestions,
+	  double centerLat,
+	  double centerLng,
+	  {required double maxDistanceKm}
+	) {
+	  final filtered = <AutocompleteSuggestion>[];
+	  
+	  for (final suggestion in suggestions) {
+		// For OSM suggestions, we would need to parse coordinates from description
+		// This is a simplified version - in practice you'd extract lat/lng from the suggestion
+		filtered.add(suggestion);
+		
+		if (filtered.length >= 6) break;
+	  }
+	  
+	  return filtered;
+	}
+
+	// Helper method to calculate distance for suggestions
+	double _calculateDistanceForSuggestions(double lat1, double lon1, double lat2, double lon2) {
+	  const earthRadius = 6371000;
+	  final dLat = _degreesToRadians(lat2 - lat1);
+	  final dLon = _degreesToRadians(lon2 - lon1);
+	  final a = (sin(dLat / 2) * sin(dLat / 2)) +
+		  cos(_degreesToRadians(lat1)) * cos(_degreesToRadians(lat2)) *
+			  (sin(dLon / 2) * sin(dLon / 2));
+	  final c = 2 * atan2(sqrt(a), sqrt(1 - a));
+	  return earthRadius * c;
+	}
+
+	double _degreesToRadians(double degrees) {
+	  return degrees * pi / 180;
+	}
+
 
 // Handle suggestion selection
 	Future<void> _onSuggestionSelected(AutocompleteSuggestion suggestion) async {
@@ -723,9 +1055,9 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
     return earthRadius * c;
   }
 
-  double _degreesToRadians(double degrees) {
-    return degrees * pi / 180;
-  }
+  //double _degreesToRadians(double degrees) {
+  //  return degrees * pi / 180;
+  //}
 
   String _formatDistance(double distanceInMeters) {
     final locale = WidgetsBinding.instance.platformDispatcher.locale;
@@ -2466,30 +2798,37 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
     );
   }
 
-  void _performSearch() {
-    final searchTerm = _searchController.text.trim();
-    if (searchTerm.isEmpty) return;
+	void _performSearch() {
+	  final searchTerm = _searchController.text.trim();
+	  if (searchTerm.isEmpty) return;
 
-    setState(() {
-      _isSearching = true;
-    });
+	  // Hide suggestions when search button is clicked
+	  setState(() {
+		_suggestions.clear();
+		_showSuggestions = false;
+		_isLoadingSuggestions = false;
+		_isSearching = true;
+	  });
 
-    // Access the map screen and perform search
-    final mapState = _mapKey.currentState as dynamic;
-    if (mapState != null) {
-      mapState.performSearch(searchTerm).then((_) {
-        if (mounted) {
-          setState(() {
-            _isSearching = false;
-          });
-        }
-      });
-    } else {
-      setState(() {
-        _isSearching = false;
-      });
-    }
-  }
+	  // Remove focus from search field
+	  _searchFocusNode.unfocus();
+
+	  // Access the map screen and perform search
+	  final mapState = _mapKey.currentState as dynamic;
+	  if (mapState != null) {
+		mapState.performSearch(searchTerm).then((_) {
+		  if (mounted) {
+			setState(() {
+			  _isSearching = false;
+			});
+		  }
+		});
+	  } else {
+		setState(() {
+		  _isSearching = false;
+		});
+	  }
+	}
  
 Future<void> _loadMapProviderDisplay() async {
   try {
@@ -2664,81 +3003,98 @@ Future<void> _selectMapProvider(String provider) async {
 
 	// NEW: Nominatim-based autocomplete suggestions for OpenStreetMap
 	Future<void> _fetchNominatimSuggestions(String query, LatLng? userLocation) async {
+	  // Check cache first
+	  final cacheKey = '${query.toLowerCase()}_${userLocation?.latitude?.toStringAsFixed(2)}_${userLocation?.longitude?.toStringAsFixed(2)}';
+	  
+	  if (_suggestionsCache.containsKey(cacheKey)) {
+		final cacheTime = _cacheTimestamps[cacheKey];
+		if (cacheTime != null && DateTime.now().difference(cacheTime).inMinutes < cacheExpirationMinutes) {
+		  print('📦 CACHE: Using cached results for: $query');
+		  if (mounted) {
+			setState(() {
+			  _suggestions = _suggestionsCache[cacheKey]!;
+			  _isLoadingSuggestions = false;
+			  _showSuggestions = _suggestions.isNotEmpty;
+			});
+		  }
+		  return;
+		}
+	  }
+
 	  // Default to Vienna if no user location
 	  final double centerLat = userLocation?.latitude ?? 48.2082;
 	  final double centerLng = userLocation?.longitude ?? 16.3738;
 
-	  // Create viewbox around current location (approximately 10km radius)
-	  final double radiusOffset = 0.1; // ~10km in degrees
-	  final double minLon = centerLng - radiusOffset;
-	  final double maxLat = centerLat + radiusOffset;
-	  final double maxLon = centerLng + radiusOffset;
-	  final double minLat = centerLat - radiusOffset;
+	  print('🔍 OSM: Starting parallel search requests for: $query');
 
-	  final url = 'https://nominatim.openstreetmap.org/search'
-		  '?q=${Uri.encodeComponent(query)}'
-		  '&format=json'
-		  '&limit=8' // Fewer results for autocomplete
-		  '&addressdetails=1'
-		  '&namedetails=1'
-		  '&viewbox=$minLon,$maxLat,$maxLon,$minLat'
-		  '&bounded=1'; // Restrict to viewbox for relevant results
+	  // Create two parallel requests with different search strategies
+	  final List<Future<List<AutocompleteSuggestion>>> searchFutures = [];
 
-	  print('🔍 FETCH: Nominatim API URL: $url');
-
-	  final response = await http.get(
-		Uri.parse(url),
-		headers: {
-		  'User-Agent': 'Locado/1.0 (Flutter App)', // Required by Nominatim
-		},
+	  // Strategy 1: Nearby search (smaller radius, bounded)
+	  final nearbyFuture = _performNominatimSearch(
+		query: query,
+		centerLat: centerLat,
+		centerLng: centerLng,
+		radiusOffset: 0.05, // ~5km radius
+		bounded: true,
+		limit: 4,
+		description: 'nearby'
 	  );
+	  searchFutures.add(nearbyFuture);
 
-	  print('🔍 FETCH: Nominatim response status: ${response.statusCode}');
+	  // Strategy 2: Broader search (larger radius, unbounded) - start slightly delayed
+	  final broaderFuture = Future.delayed(
+		const Duration(milliseconds: 100),
+		() => _performNominatimSearch(
+		  query: query,
+		  centerLat: centerLat,
+		  centerLng: centerLng,
+		  radiusOffset: 0.2, // ~20km radius
+		  bounded: false,
+		  limit: 6,
+		  description: 'broader'
+		)
+	  );
+	  searchFutures.add(broaderFuture);
 
-	  if (response.statusCode == 200) {
-		final List<dynamic> results = json.decode(response.body);
-		print('🔍 FETCH: Found ${results.length} Nominatim results');
+	  try {
+		// Wait for first result or timeout after 2 seconds
+		final results = await Future.wait(
+		  searchFutures,
+		  eagerError: false,
+		).timeout(const Duration(seconds: 3));
 
-		// Convert Nominatim results to AutocompleteSuggestion format
-		final List<AutocompleteSuggestion> suggestions = [];
+		// Combine and deduplicate results
+		final Set<String> seenPlaceIds = {};
+		final List<AutocompleteSuggestion> combinedSuggestions = [];
 
-		for (final result in results) {
-		  final displayName = result['display_name'] ?? '';
-		  final parts = displayName.split(',');
-		  
-		  // Extract main text (place name)
-		  String mainText = _extractBestNameFromNominatim(result);
-		  
-		  // Extract secondary text (address/location info)
-		  String? secondaryText;
-		  if (parts.length > 1) {
-			// Take next 2-3 parts for context
-			final contextParts = parts.skip(1).take(3).map((s) => s.trim()).toList();
-			secondaryText = contextParts.join(', ');
+		for (final resultList in results) {
+		  for (final suggestion in resultList) {
+			if (!seenPlaceIds.contains(suggestion.placeId)) {
+			  seenPlaceIds.add(suggestion.placeId);
+			  combinedSuggestions.add(suggestion);
+			  if (combinedSuggestions.length >= 8) break; // Limit total results
+			}
 		  }
-
-		  suggestions.add(
-			AutocompleteSuggestion(
-			  placeId: 'osm_${result['osm_type']}_${result['osm_id']}', // Create unique ID
-			  description: displayName,
-			  mainText: mainText,
-			  secondaryText: secondaryText,
-			),
-		  );
+		  if (combinedSuggestions.length >= 8) break;
 		}
 
-		print('🔍 FETCH: Converted to ${suggestions.length} OSM suggestions');
+		print('🔍 OSM: Combined ${combinedSuggestions.length} unique suggestions');
+
+		// Cache the results
+		_suggestionsCache[cacheKey] = combinedSuggestions;
+		_cacheTimestamps[cacheKey] = DateTime.now();
 
 		if (mounted) {
 		  setState(() {
-			_suggestions = suggestions;
+			_suggestions = combinedSuggestions;
 			_isLoadingSuggestions = false;
-			_showSuggestions = suggestions.isNotEmpty;
+			_showSuggestions = combinedSuggestions.isNotEmpty;
 		  });
-		  print('🔍 FETCH: Updated UI with ${suggestions.length} Nominatim suggestions');
 		}
-	  } else {
-		print('❌ FETCH: Nominatim error response: ${response.statusCode}');
+
+	  } catch (e) {
+		print('❌ OSM: Parallel search failed: $e');
 		if (mounted) {
 		  setState(() {
 			_suggestions.clear();
@@ -2746,6 +3102,93 @@ Future<void> _selectMapProvider(String provider) async {
 			_showSuggestions = false;
 		  });
 		}
+	  }
+	}
+
+	// New helper method for individual Nominatim searches
+	Future<List<AutocompleteSuggestion>> _performNominatimSearch({
+	  required String query,
+	  required double centerLat,
+	  required double centerLng,
+	  required double radiusOffset,
+	  required bool bounded,
+	  required int limit,
+	  required String description,
+	}) async {
+	  final double minLon = centerLng - radiusOffset;
+	  final double maxLat = centerLat + radiusOffset;
+	  final double maxLon = centerLng + radiusOffset;
+	  final double minLat = centerLat - radiusOffset;
+
+	  String url = 'https://nominatim.openstreetmap.org/search'
+		  '?q=${Uri.encodeComponent(query)}'
+		  '&format=json'
+		  '&limit=$limit'
+		  '&addressdetails=1'
+		  '&namedetails=1'
+		  '&viewbox=$minLon,$maxLat,$maxLon,$minLat';
+
+	  if (bounded) {
+		url += '&bounded=1';
+	  }
+
+	  print('🔍 OSM ($description): ${url.substring(0, 100)}...');
+
+	  try {
+		final response = await http.get(
+		  Uri.parse(url),
+		  headers: {'User-Agent': 'Locado/1.0 (Flutter App)'},
+		).timeout(const Duration(seconds: 2));
+
+		if (response.statusCode == 200) {
+		  final List<dynamic> results = json.decode(response.body);
+		  print('🔍 OSM ($description): Found ${results.length} results');
+
+		  final List<AutocompleteSuggestion> suggestions = [];
+		  for (final result in results) {
+			final displayName = result['display_name'] ?? '';
+			final parts = displayName.split(',');
+
+			String mainText = _extractBestNameFromNominatim(result);
+			String? secondaryText;
+			if (parts.length > 1) {
+			  final contextParts = parts.skip(1).take(3).map((s) => s.trim()).toList();
+			  secondaryText = contextParts.join(', ');
+			}
+
+			suggestions.add(
+			  AutocompleteSuggestion(
+				placeId: 'osm_${result['osm_type']}_${result['osm_id']}',
+				description: displayName,
+				mainText: mainText,
+				secondaryText: secondaryText,
+			  ),
+			);
+		  }
+
+		  return suggestions;
+		}
+	  } catch (e) {
+		print('❌ OSM ($description): Request failed: $e');
+	  }
+
+	  return [];
+	}
+
+	// Add cache cleanup method
+	void _cleanupCache() {
+	  final now = DateTime.now();
+	  final keysToRemove = <String>[];
+
+	  _cacheTimestamps.forEach((key, timestamp) {
+		if (now.difference(timestamp).inMinutes > cacheExpirationMinutes) {
+		  keysToRemove.add(key);
+		}
+	  });
+
+	  for (final key in keysToRemove) {
+		_suggestionsCache.remove(key);
+		_cacheTimestamps.remove(key);
 	  }
 	}
 
@@ -3679,4 +4122,6 @@ Future<void> _selectMapProvider(String provider) async {
 		),
 	  );
 	}
+	
+
 }
