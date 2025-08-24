@@ -30,6 +30,8 @@ import '../services/app_bootstrap_service.dart';
 import '../services/task_location_cache.dart';
 import 'package:locado_final/models/general_task.dart';
 import 'package:locado_final/screens/general_task_detail_screen.dart';
+import 'package:locado_final/models/calendar_event.dart';
+import '../screens/event_details_screen.dart';
 
 
 // Helper class for task distance calculations
@@ -108,6 +110,17 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
   
   List<GeneralTask>? _cachedGeneralTasks;
   bool _isLoadingGeneralTasks = true;
+  
+  List<CalendarEvent>? _cachedCalendarEvents;
+  bool _isLoadingCalendarEvents = true;
+  
+  bool _isLocatedTasksExpanded = false;
+  bool _isGeneralTasksExpanded = false;
+  bool _isCalendarTasksExpanded = false;
+  
+  bool _isPastCalendarTasksExpanded = false;
+  bool _isUpcomingCalendarTasksExpanded = false;
+
 
 	@override
 	void initState() {
@@ -181,6 +194,8 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
 		if (mounted) {
 		  setState(() {
 			_isLoadingTasks = true;
+			_isLoadingGeneralTasks = true;
+			_isLoadingCalendarEvents = true;
 		  });
 		}
 		
@@ -206,19 +221,30 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
 		  print('ℹ️ CACHE: No cache available, will load from database');
 		}
 		
-		// Step 2b: INSTANT - Load general tasks from cache
-		print('🚀 CACHE: Loading general tasks...');
-		// For now, load directly from database since we just added this feature
+		// Step 2b: INSTANT - Load general tasks and calendar events
+		print('🚀 CACHE: Loading general tasks and calendar events...');
 		final generalTasks = await DatabaseHelper.instance.getAllGeneralTasks();
+		final calendarEvents = await DatabaseHelper.instance.getAllCalendarEvents();
+		
 		_cachedGeneralTasks = generalTasks;
+		_cachedCalendarEvents = calendarEvents;
 
-		print('🚀 CACHE: Loaded ${generalTasks.length} general tasks');
+		print('🚀 CACHE: Loaded ${generalTasks.length} general tasks and ${calendarEvents.length} calendar events');
+		
+		if (mounted) {
+		  setState(() {
+			_isLoadingGeneralTasks = false;
+			_isLoadingCalendarEvents = false;
+		  });
+		}
 		
 		// Step 3: BACKGROUND - Refresh from database (don't block UI)
 		Future.delayed(const Duration(milliseconds: 100), () async {
 		  try {
 			print('🔄 CACHE: Refreshing from database in background...');
 			final freshTasks = await DatabaseHelper.instance.getAllTaskLocations();
+			final freshGeneralTasks = await DatabaseHelper.instance.getAllGeneralTasks();
+			final freshCalendarEvents = await DatabaseHelper.instance.getAllCalendarEvents();
 			
 			// Update cache with fresh data
 			await TaskLocationCache.instance.updateCache(freshTasks);
@@ -234,17 +260,27 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
 			  dataChanged = !cachedIds.containsAll(freshIds) || !freshIds.containsAll(cachedIds);
 			}
 			
+			// Check if general tasks or calendar events changed
+			if (!dataChanged) {
+			  dataChanged = _cachedGeneralTasks?.length != freshGeneralTasks.length ||
+						   _cachedCalendarEvents?.length != freshCalendarEvents.length;
+			}
+			
 			// Only update UI if data actually changed
 			if (dataChanged && mounted) {
 			  _cachedTasks = freshTasks;
 			  _cachedSortedTasks = freshTasks.map((task) => TaskWithDistance(task, 0.0)).toList();
+			  _cachedGeneralTasks = freshGeneralTasks;
+			  _cachedCalendarEvents = freshCalendarEvents;
 			  
 			  setState(() {
 				_isLoadingTasks = false;
 				_isLoadingDistance = false;
+				_isLoadingGeneralTasks = false;
+				_isLoadingCalendarEvents = false;
 			  });
 			  
-			  print('🔄 CACHE: UI updated with fresh data (${freshTasks.length} tasks)');
+			  print('🔄 CACHE: UI updated with fresh data (${freshTasks.length} tasks, ${freshGeneralTasks.length} general tasks, ${freshCalendarEvents.length} calendar events)');
 			  
 			  // Recalculate distances with fresh data
 			  if (freshTasks.isNotEmpty) {
@@ -265,9 +301,13 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
 		if (mounted) {
 		  _cachedTasks = [];
 		  _cachedSortedTasks = [];
+		  _cachedGeneralTasks = [];
+		  _cachedCalendarEvents = [];
 		  setState(() {
 			_isLoadingTasks = false;
 			_isLoadingDistance = false;
+			_isLoadingGeneralTasks = false;
+			_isLoadingCalendarEvents = false;
 		  });
 		}
 	  }
@@ -965,78 +1005,353 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
 	}
 
 	Widget _buildTaskListPage() {
-	  return DefaultTabController(
-		length: 2,
-		child: Scaffold(
-		  appBar: AppBar(
-			title: Text(_isSelectionMode
-				? '${_selectedTaskIds.length} Selected'
-				: 'All Tasks'
-			),
-			backgroundColor: Colors.teal,
-			foregroundColor: Colors.white,
-			automaticallyImplyLeading: false,
-			bottom: _isSelectionMode ? null : TabBar(
-			  labelColor: Colors.white,
-			  unselectedLabelColor: Colors.white70,
-			  indicatorColor: Colors.white,
-			  tabs: const [
-				Tab(text: 'Located Tasks', icon: Icon(Icons.location_on, size: 18)),
-				Tab(text: 'General Tasks', icon: Icon(Icons.task_alt, size: 18)),
-			  ],
-			  onTap: (index) {
-				setState(() {
-				  _tasksSubTabIndex = index;
-				});
-			  },
-			),
-			actions: [
-			  if (_isSelectionMode) ...[
-				if (_isDeleting)
-				  const Padding(
-					padding: EdgeInsets.all(16.0),
-					child: SizedBox(
-					  width: 20,
-					  height: 20,
-					  child: CircularProgressIndicator(
-						strokeWidth: 2,
-						color: Colors.white,
-					  ),
+	  return Scaffold(
+		appBar: AppBar(
+		  title: Text(_isSelectionMode
+			  ? '${_selectedTaskIds.length} Selected'
+			  : 'All Tasks'
+		  ),
+		  backgroundColor: Colors.teal,
+		  foregroundColor: Colors.white,
+		  automaticallyImplyLeading: false,
+		  actions: [
+			if (_isSelectionMode) ...[
+			  if (_isDeleting)
+				const Padding(
+				  padding: EdgeInsets.all(16.0),
+				  child: SizedBox(
+					width: 20,
+					height: 20,
+					child: CircularProgressIndicator(
+					  strokeWidth: 2,
+					  color: Colors.white,
 					),
-				  )
-				else
-				  IconButton(
-					icon: const Icon(Icons.delete),
-					onPressed: _selectedTaskIds.isEmpty ? null : _deleteSelectedTasks,
 				  ),
+				)
+			  else
 				IconButton(
-				  icon: const Icon(Icons.close),
-				  onPressed: _toggleSelectionMode,
+				  icon: const Icon(Icons.delete),
+				  onPressed: _selectedTaskIds.isEmpty ? null : _deleteSelectedTasks,
 				),
-			  ] else ...[
-				IconButton(
-				  icon: const Icon(Icons.refresh),
-				  onPressed: () {
-					print('📄 TASKS LIST: Manual refresh button pressed');
-					_loadTaskData();
-				  },
-				  tooltip: 'Refresh Tasks',
+			  IconButton(
+				icon: const Icon(Icons.close),
+				onPressed: _toggleSelectionMode,
+			  ),
+			] else ...[
+			  IconButton(
+				icon: const Icon(Icons.refresh),
+				onPressed: () {
+				  print('Tasks List: Manual refresh button pressed');
+				  _loadTaskData();
+				},
+				tooltip: 'Refresh Tasks',
+			  ),
+			  IconButton(
+				icon: const Icon(Icons.checklist),
+				onPressed: _toggleSelectionMode,
+			  ),
+			],
+		  ],
+		),
+		body: _buildExpandableTaskSections(),
+	  );
+	}
+
+	Widget _buildExpandableTaskSections() {
+	  // Show loading indicator
+	  if (_isLoadingTasks || _isLoadingGeneralTasks || _isLoadingCalendarEvents) {
+		return const Center(child: CircularProgressIndicator());
+	  }
+
+	  // Prepare data for sections
+	  List<TaskWithDistance> locatedTasks = [];
+	  List<TaskWithDistance> tasksWithoutLocation = [];
+	  List<GeneralTask> generalTasks = _cachedGeneralTasks ?? [];
+	  List<CalendarEvent> calendarTasks = _cachedCalendarEvents ?? [];
+
+	  if (_cachedSortedTasks != null) {
+		for (final twd in _cachedSortedTasks!) {
+		  if (twd.task.hasLocation) {
+			locatedTasks.add(twd);
+		  } else {
+			tasksWithoutLocation.add(twd);
+		  }
+		}
+	  }
+
+	  // Convert TaskLocation without location to GeneralTask format for display
+	  List<GeneralTask> allGeneralTasks = List.from(generalTasks);
+	  
+	  for (final twd in tasksWithoutLocation) {
+		final task = twd.task;
+		if (task.id != null) {
+		  allGeneralTasks.add(GeneralTask(
+			id: task.id,
+			title: task.title,
+			taskItems: List<String>.from(task.taskItems),
+			colorHex: task.colorHex,
+			scheduledDateTime: task.scheduledDateTime,
+			linkedCalendarEventId: task.linkedCalendarEventId,
+		  ));
+		}
+	  }
+
+	  // Calculate total count
+	  final totalTaskCount = locatedTasks.length + allGeneralTasks.length + calendarTasks.length;
+
+	  // Show empty state if no tasks at all
+	  if (totalTaskCount == 0) {
+		return Center(
+		  child: Column(
+			mainAxisAlignment: MainAxisAlignment.center,
+			children: [
+			  Icon(
+				Icons.task_alt,
+				size: 64,
+				color: Colors.grey.shade400,
+			  ),
+			  const SizedBox(height: 4),
+			  Text(
+				'No tasks found',
+				style: TextStyle(
+				  fontSize: 18,
+				  color: Colors.grey.shade600,
+				  fontWeight: FontWeight.w500,
 				),
-				IconButton(
-				  icon: const Icon(Icons.checklist),
-				  onPressed: _toggleSelectionMode,
+			  ),
+			  const SizedBox(height: 4),
+			  Text(
+				'Add your first task using the + button',
+				style: TextStyle(
+				  fontSize: 14,
+				  color: Colors.grey.shade500,
 				),
-			  ],
+			  ),
 			],
 		  ),
-		  body: _isSelectionMode 
-			  ? _buildTaskListBody() // Show all tasks in selection mode
-			  : TabBarView(
-				  children: [
-					_buildTaskListBody(filterType: 'located'),
-					_buildTaskListBody(filterType: 'general'),
-				  ],
+		);
+	  }
+
+	  return Column(
+		children: [
+		  // Total tasks header
+		  Container(
+			width: double.infinity,
+			padding: const EdgeInsets.all(16),
+			margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+			decoration: BoxDecoration(
+			  color: Colors.teal.shade50,
+			  borderRadius: BorderRadius.circular(12),
+			  border: Border.all(color: Colors.teal.shade200),
+			),
+			child: Row(
+			  children: [
+				Container(
+				  padding: const EdgeInsets.all(8),
+				  decoration: BoxDecoration(
+					color: Colors.teal,
+					shape: BoxShape.circle,
+				  ),
+				  child: Icon(Icons.task_alt, color: Colors.white, size: 20),
 				),
+				const SizedBox(width: 12),
+				Text(
+				  'Total Tasks: $totalTaskCount',
+				  style: TextStyle(
+					fontSize: 18,
+					fontWeight: FontWeight.bold,
+					color: Colors.teal.shade700,
+				  ),
+				),
+				const Spacer(),
+				if (_isSelectionMode)
+				  Text(
+					'${_selectedTaskIds.length} selected',
+					style: TextStyle(
+					  fontSize: 14,
+					  color: Colors.teal.shade600,
+					),
+				  ),
+			  ],
+			),
+		  ),
+
+		  // Scrollable task sections
+		  Expanded(
+			child: ListView(
+			  padding: const EdgeInsets.all(16),
+			  children: [
+				// Located Tasks Section
+				_buildIndependentTaskSection(
+				  title: 'Located Tasks',
+				  count: locatedTasks.length,
+				  icon: Icons.location_on,
+				  color: Colors.blue,
+				  isExpanded: _isLocatedTasksExpanded,
+				  onExpansionChanged: (expanded) {
+					setState(() {
+					  _isLocatedTasksExpanded = expanded;
+					});
+				  },
+				  children: locatedTasks.map((taskWithDistance) => 
+					_buildLocatedTaskCard(taskWithDistance)
+				  ).toList(),
+				),
+				
+				const SizedBox(height: 4),
+				
+				// General Tasks Section
+				_buildIndependentTaskSection(
+				  title: 'General Tasks',
+				  count: allGeneralTasks.length,
+				  icon: Icons.task_alt,
+				  color: Colors.orange,
+				  isExpanded: _isGeneralTasksExpanded,
+				  onExpansionChanged: (expanded) {
+					setState(() {
+					  _isGeneralTasksExpanded = expanded;
+					});
+				  },
+				  children: allGeneralTasks.map((generalTask) => 
+					_buildGeneralTaskCard(generalTask)
+				  ).toList(),
+				),
+				
+				const SizedBox(height: 4),
+				
+				// Calendar Tasks Section
+				_buildIndependentTaskSection(
+				  title: 'Calendar Tasks',
+				  count: calendarTasks.length,
+				  icon: Icons.event,
+				  color: Colors.green,
+				  isExpanded: _isCalendarTasksExpanded,
+				  onExpansionChanged: (expanded) {
+					setState(() {
+					  _isCalendarTasksExpanded = expanded;
+					});
+				  },
+				  children: _isCalendarTasksExpanded 
+					? _buildCalendarSubcategories(calendarTasks)
+					: [],
+				),
+			  ],
+			),
+		  ),
+		],
+	  );
+	}
+
+	Widget _buildIndependentTaskSection({
+	  required String title,
+	  required int count,
+	  required IconData icon,
+	  required Color color,
+	  required bool isExpanded,
+	  required ValueChanged<bool> onExpansionChanged,
+	  required List<Widget> children,
+	}) {
+	  return Card(
+		elevation: 2,
+		shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+		child: Column(
+		  children: [
+			// Header that can be tapped to expand/collapse
+			Material(
+			  color: Colors.transparent,
+			  child: InkWell(
+				borderRadius: BorderRadius.circular(12),
+				onTap: () => onExpansionChanged(!isExpanded),
+				child: Padding(
+				  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+				  child: Row(
+					children: [
+					  Container(
+						padding: const EdgeInsets.all(8),
+						decoration: BoxDecoration(
+						  color: color.withOpacity(0.1),
+						  shape: BoxShape.circle,
+						),
+						child: Icon(icon, color: color, size: 24),
+					  ),
+					  const SizedBox(width: 16),
+					  Expanded(
+						child: Column(
+						  crossAxisAlignment: CrossAxisAlignment.start,
+						  children: [
+							Text(
+							  title,
+							  style: const TextStyle(
+								fontSize: 16,
+								fontWeight: FontWeight.w600,
+							  ),
+							),
+							const SizedBox(height: 2),
+							Text(
+							  '$count task${count != 1 ? 's' : ''}',
+							  style: TextStyle(
+								color: Colors.grey.shade600,
+								fontSize: 14,
+							  ),
+							),
+						  ],
+						),
+					  ),
+					  Container(
+						padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+						decoration: BoxDecoration(
+						  color: color.withOpacity(0.1),
+						  borderRadius: BorderRadius.circular(12),
+						),
+						child: Text(
+						  count.toString(),
+						  style: TextStyle(
+							color: color,
+							fontWeight: FontWeight.bold,
+							fontSize: 12,
+						  ),
+						),
+					  ),
+					  const SizedBox(width: 8),
+					  AnimatedRotation(
+						turns: isExpanded ? 0.5 : 0.0,
+						duration: const Duration(milliseconds: 200),
+						child: Icon(
+						  Icons.expand_more,
+						  color: Colors.grey.shade600,
+						),
+					  ),
+					],
+				  ),
+				),
+			  ),
+			),
+			
+			// Expandable content
+			AnimatedContainer(
+			  duration: const Duration(milliseconds: 300),
+			  curve: Curves.easeInOut,
+			  height: isExpanded ? null : 0,
+			  child: isExpanded
+				  ? Padding(
+					  padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+					  child: children.isEmpty
+						  ? Padding(
+							  padding: const EdgeInsets.all(16),
+							  child: Text(
+								'No $title found',
+								style: TextStyle(
+								  color: Colors.grey.shade500,
+								  fontSize: 14,
+								),
+								textAlign: TextAlign.center,
+							  ),
+							)
+						  : Column(children: children),
+					)
+				  : const SizedBox.shrink(),
+			),
+		  ],
 		),
 	  );
 	}
@@ -2704,6 +3019,657 @@ Future<void> _selectMapProvider(String provider) async {
 			  },
 			  style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
 			  child: const Text('Delete', style: TextStyle(color: Colors.white)),
+			),
+		  ],
+		),
+	  );
+	}
+	
+	Widget _buildLocatedTaskCard(TaskWithDistance taskWithDistance) {
+	  final task = taskWithDistance.task;
+	  final color = Color(int.parse(task.colorHex.replaceFirst('#', '0xff')));
+	  final isSelected = task.id != null && _selectedTaskIds.contains(task.id!);
+
+	  return Container(
+		margin: const EdgeInsets.only(bottom: 12),
+		decoration: BoxDecoration(
+		  color: isSelected
+			  ? Colors.teal.shade50
+			  : Theme.of(context).cardColor,
+		  borderRadius: BorderRadius.circular(12),
+		  border: isSelected
+			  ? Border.all(color: Colors.teal, width: 2)
+			  : Border.all(color: Colors.grey.shade200, width: 1),
+		  boxShadow: [
+			BoxShadow(
+			  color: Colors.grey.shade100,
+			  blurRadius: 4,
+			  offset: const Offset(0, 2),
+			),
+		  ],
+		),
+		child: Material(
+		  color: Colors.transparent,
+		  child: InkWell(
+			borderRadius: BorderRadius.circular(12),
+			onTap: () {
+			  if (_isSelectionMode) {
+				if (task.id != null) {
+				  _toggleTaskSelection(task.id!);
+				}
+			  } else {
+				_openTaskDetail(task);
+			  }
+			},
+			onLongPress: () {
+			  if (!_isSelectionMode) {
+				_deleteTask(task);
+			  }
+			},
+			child: Padding(
+			  padding: const EdgeInsets.all(16),
+			  child: Row(
+				children: [
+				  // Checkbox (only show in selection mode)
+				  if (_isSelectionMode) ...[
+					Checkbox(
+					  value: isSelected,
+					  onChanged: (value) {
+						if (task.id != null) {
+						  _toggleTaskSelection(task.id!);
+						}
+					  },
+					  activeColor: Colors.teal,
+					),
+					const SizedBox(width: 8),
+				  ],
+
+				  // Color circle - focus on map when tapped (not in selection mode)
+				  GestureDetector(
+					onTap: _isSelectionMode ? null : () => _focusOnTask(task),
+					child: Container(
+					  width: 40,
+					  height: 40,
+					  decoration: BoxDecoration(
+						color: color,
+						shape: BoxShape.circle,
+						boxShadow: [
+						  BoxShadow(
+							color: color.withOpacity(0.3),
+							blurRadius: 4,
+							offset: const Offset(0, 2),
+						  ),
+						],
+					  ),
+					  child: const Icon(
+						Icons.location_on,
+						color: Colors.white,
+						size: 20,
+					  ),
+					),
+				  ),
+
+				  const SizedBox(width: 16),
+
+				  // Task info
+				  Expanded(
+					child: Column(
+					  crossAxisAlignment: CrossAxisAlignment.start,
+					  children: [
+						Text(
+						  task.title,
+						  style: const TextStyle(
+							fontWeight: FontWeight.w600,
+							fontSize: 16,
+						  ),
+						  maxLines: 1,
+						  overflow: TextOverflow.ellipsis,
+						),
+						const SizedBox(height: 4),
+						Row(
+						  children: [
+							Icon(
+							  Icons.checklist,
+							  size: 14,
+							  color: Colors.grey.shade500,
+							),
+							const SizedBox(width: 4),
+							Text(
+							  '${task.taskItems.length} items',
+							  style: TextStyle(
+								color: Colors.grey.shade600,
+								fontSize: 14,
+							  ),
+							),
+
+							// Show distance
+							const SizedBox(width: 16),
+							Icon(
+							  Icons.location_on,
+							  size: 14,
+							  color: Colors.grey.shade500,
+							),
+							const SizedBox(width: 4),
+							Text(
+							  _formatDistance(taskWithDistance.distance),
+							  style: TextStyle(
+								color: Colors.grey.shade600,
+								fontSize: 14,
+								fontWeight: FontWeight.w500,
+							  ),
+							),
+						  ],
+						),
+					  ],
+					),
+				  ),
+
+				  // Arrow icon (only show when not in selection mode)
+				  if (!_isSelectionMode)
+					Icon(
+					  Icons.arrow_forward_ios,
+					  color: Colors.grey.shade400,
+					  size: 16,
+					),
+				],
+			  ),
+			),
+		  ),
+		),
+	  );
+	}
+
+	Widget _buildGeneralTaskCard(GeneralTask generalTask) {
+	  final color = Color(int.parse(generalTask.colorHex.replaceFirst('#', '0xff')));
+	  final isSelected = generalTask.id != null && _selectedTaskIds.contains(generalTask.id!);
+
+	  return Container(
+		margin: const EdgeInsets.only(bottom: 12),
+		decoration: BoxDecoration(
+		  color: isSelected
+			  ? Colors.teal.shade50
+			  : Theme.of(context).cardColor,
+		  borderRadius: BorderRadius.circular(12),
+		  border: isSelected
+			  ? Border.all(color: Colors.teal, width: 2)
+			  : Border.all(color: Colors.grey.shade200, width: 1),
+		  boxShadow: [
+			BoxShadow(
+			  color: Colors.grey.shade100,
+			  blurRadius: 4,
+			  offset: const Offset(0, 2),
+			),
+		  ],
+		),
+		child: Material(
+		  color: Colors.transparent,
+		  child: InkWell(
+			borderRadius: BorderRadius.circular(12),
+			onTap: () {
+			  if (_isSelectionMode) {
+				if (generalTask.id != null) {
+				  _toggleTaskSelection(generalTask.id!);
+				}
+			  } else {
+				_openGeneralTaskDetail(generalTask);
+			  }
+			},
+			onLongPress: () {
+			  if (!_isSelectionMode) {
+				_deleteGeneralTask(generalTask);
+			  }
+			},
+			child: Padding(
+			  padding: const EdgeInsets.all(16),
+			  child: Row(
+				children: [
+				  // Checkbox (only show in selection mode)
+				  if (_isSelectionMode) ...[
+					Checkbox(
+					  value: isSelected,
+					  onChanged: (value) {
+						if (generalTask.id != null) {
+						  _toggleTaskSelection(generalTask.id!);
+						}
+					  },
+					  activeColor: Colors.teal,
+					),
+					const SizedBox(width: 8),
+				  ],
+
+				  // Color circle - no location icon for general tasks
+				  Container(
+					width: 40,
+					height: 40,
+					decoration: BoxDecoration(
+					  color: color,
+					  shape: BoxShape.circle,
+					  boxShadow: [
+						BoxShadow(
+						  color: color.withOpacity(0.3),
+						  blurRadius: 4,
+						  offset: const Offset(0, 2),
+						),
+					  ],
+					),
+					child: const Icon(
+					  Icons.task_alt,
+					  color: Colors.white,
+					  size: 20,
+					),
+				  ),
+
+				  const SizedBox(width: 16),
+
+				  // Task info
+				  Expanded(
+					child: Column(
+					  crossAxisAlignment: CrossAxisAlignment.start,
+					  children: [
+						Text(
+						  generalTask.title,
+						  style: const TextStyle(
+							fontWeight: FontWeight.w600,
+							fontSize: 16,
+						  ),
+						  maxLines: 1,
+						  overflow: TextOverflow.ellipsis,
+						),
+						const SizedBox(height: 4),
+						Row(
+						  children: [
+							Icon(
+							  Icons.checklist,
+							  size: 14,
+							  color: Colors.grey.shade500,
+							),
+							const SizedBox(width: 4),
+							Text(
+							  '${generalTask.taskItems.length} items',
+							  style: TextStyle(
+								color: Colors.grey.shade600,
+								fontSize: 14,
+							  ),
+							),
+
+							// Show "No location" instead of distance
+							const SizedBox(width: 16),
+							Icon(
+							  Icons.location_off,
+							  size: 14,
+							  color: Colors.grey.shade500,
+							),
+							const SizedBox(width: 4),
+							Text(
+							  'No location',
+							  style: TextStyle(
+								color: Colors.grey.shade600,
+								fontSize: 14,
+								fontWeight: FontWeight.w500,
+							  ),
+							),
+						  ],
+						),
+					  ],
+					),
+				  ),
+
+				  // Arrow icon (only show when not in selection mode)
+				  if (!_isSelectionMode)
+					Icon(
+					  Icons.arrow_forward_ios,
+					  color: Colors.grey.shade400,
+					  size: 16,
+					),
+				],
+			  ),
+			),
+		  ),
+		),
+	  );
+	}
+
+	Widget _buildCalendarTaskCard(CalendarEvent calendarEvent, {String? forceStyle}) {
+	  final now = DateTime.now();
+	  final eventDateTime = calendarEvent.dateTime;
+	  final isPastEvent = forceStyle == 'past' || (forceStyle == null && eventDateTime.isBefore(now));
+	  
+	  // Use different colors for past and future events
+	  Color cardColor;
+	  Color originalColor = Color(int.parse(calendarEvent.colorHex.replaceFirst('#', '0xff')));
+	  
+	  if (isPastEvent) {
+		cardColor = Colors.grey.shade400;
+	  } else {
+		cardColor = originalColor;
+	  }
+	  
+	  final isSelected = calendarEvent.id != null && _selectedTaskIds.contains(calendarEvent.id!);
+
+	  return Container(
+		margin: const EdgeInsets.only(bottom: 8),
+		decoration: BoxDecoration(
+		  color: isSelected
+			  ? Colors.teal.shade50
+			  : Theme.of(context).cardColor,
+		  borderRadius: BorderRadius.circular(8),
+		  border: isSelected
+			  ? Border.all(color: Colors.teal, width: 2)
+			  : Border.all(color: Colors.grey.shade200, width: 1),
+		  boxShadow: [
+			BoxShadow(
+			  color: Colors.grey.shade100,
+			  blurRadius: 2,
+			  offset: const Offset(0, 1),
+			),
+		  ],
+		),
+		child: Material(
+		  color: Colors.transparent,
+		  child: InkWell(
+			borderRadius: BorderRadius.circular(8),
+			onTap: () {
+			  if (_isSelectionMode) {
+				if (calendarEvent.id != null) {
+				  _toggleTaskSelection(calendarEvent.id!);
+				}
+			  } else {
+				_openCalendarEventDetail(calendarEvent);
+			  }
+			},
+			child: Padding(
+			  padding: const EdgeInsets.all(12),
+			  child: Row(
+				children: [
+				  // Checkbox (only show in selection mode)
+				  if (_isSelectionMode) ...[
+					Checkbox(
+					  value: isSelected,
+					  onChanged: (value) {
+						if (calendarEvent.id != null) {
+						  _toggleTaskSelection(calendarEvent.id!);
+						}
+					  },
+					  activeColor: Colors.teal,
+					),
+					const SizedBox(width: 8),
+				  ],
+
+				  // Color circle - smaller for subcategory
+				  Container(
+					width: 32,
+					height: 32,
+					decoration: BoxDecoration(
+					  color: cardColor,
+					  shape: BoxShape.circle,
+					  boxShadow: [
+						BoxShadow(
+						  color: cardColor.withOpacity(0.3),
+						  blurRadius: 2,
+						  offset: const Offset(0, 1),
+						),
+					  ],
+					),
+					child: Icon(
+					  isPastEvent ? Icons.event_busy : Icons.event,
+					  color: Colors.white,
+					  size: 16,
+					),
+				  ),
+
+				  const SizedBox(width: 12),
+
+				  // Event info
+				  Expanded(
+					child: Column(
+					  crossAxisAlignment: CrossAxisAlignment.start,
+					  children: [
+						Text(
+						  calendarEvent.title,
+						  style: TextStyle(
+							fontWeight: FontWeight.w600,
+							fontSize: 14,
+							color: isPastEvent ? Colors.grey.shade600 : Colors.black87,
+							decoration: isPastEvent ? TextDecoration.lineThrough : null,
+						  ),
+						  maxLines: 1,
+						  overflow: TextOverflow.ellipsis,
+						),
+						const SizedBox(height: 2),
+						Text(
+						  _formatDateTime(calendarEvent.dateTime),
+						  style: TextStyle(
+							color: isPastEvent ? Colors.grey.shade500 : Colors.grey.shade600,
+							fontSize: 12,
+							fontWeight: FontWeight.w400,
+						  ),
+						),
+					  ],
+					),
+				  ),
+
+				  // Arrow icon (only show when not in selection mode)
+				  if (!_isSelectionMode)
+					Icon(
+					  Icons.arrow_forward_ios,
+					  color: isPastEvent ? Colors.grey.shade400 : Colors.grey.shade400,
+					  size: 14,
+					),
+				],
+			  ),
+			),
+		  ),
+		),
+	  );
+	}
+
+	// Helper method to format calendar event date/time
+	String _formatDateTime(DateTime dateTime) {
+	  final now = DateTime.now();
+	  final today = DateTime(now.year, now.month, now.day);
+	  final eventDate = DateTime(dateTime.year, dateTime.month, dateTime.day);
+	  
+	  final hour = dateTime.hour;
+	  final minute = dateTime.minute.toString().padLeft(2, '0');
+	  final period = hour < 12 ? 'AM' : 'PM';
+	  final displayHour = hour == 0 ? 12 : (hour > 12 ? hour - 12 : hour);
+	  final timeString = '$displayHour:$minute $period';
+	  
+	  if (eventDate == today) {
+		return 'Today at $timeString';
+	  } else if (eventDate == today.add(Duration(days: 1))) {
+		return 'Tomorrow at $timeString';
+	  } else {
+		const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+					   'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+		return '${months[dateTime.month - 1]} ${dateTime.day} at $timeString';
+	  }
+	}
+	
+	void _openCalendarEventDetail(CalendarEvent calendarEvent) async {
+	  print('Opening calendar event: ${calendarEvent.title}');
+	  
+	  try {
+		// Import the EventDetailsScreen and navigate to it
+		final result = await Navigator.push(
+		  context,
+		  MaterialPageRoute(
+			builder: (context) => EventDetailsScreen(
+			  event: calendarEvent,
+			  taskLocations: _cachedTasks ?? [], // Pass current task locations
+			),
+		  ),
+		);
+
+		// If event was modified, reload data
+		if (result == true) {
+		  await _loadTaskData();
+		}
+	  } catch (e) {
+		print('Error opening calendar event detail: $e');
+		ScaffoldMessenger.of(context).showSnackBar(
+		  SnackBar(
+			content: Text('Error opening calendar event: $e'),
+			backgroundColor: Colors.red,
+		  ),
+		);
+	  }
+	}
+	
+	List<Widget> _buildCalendarSubcategories(List<CalendarEvent> calendarTasks) {
+	  final now = DateTime.now();
+	  
+	  // Separate past and upcoming events
+	  final pastEvents = calendarTasks.where((event) => event.dateTime.isBefore(now)).toList();
+	  final upcomingEvents = calendarTasks.where((event) => event.dateTime.isAfter(now) || event.dateTime.isAtSameMomentAs(now)).toList();
+	  
+	  // Sort past events (most recent first) and upcoming events (earliest first)
+	  pastEvents.sort((a, b) => b.dateTime.compareTo(a.dateTime));
+	  upcomingEvents.sort((a, b) => a.dateTime.compareTo(b.dateTime));
+	  
+	  return [
+		// Upcoming Events Subcategory
+		_buildCalendarSubcategory(
+		  title: 'Upcoming Events',
+		  count: upcomingEvents.length,
+		  icon: Icons.event_available,
+		  color: Colors.green,
+		  isExpanded: _isUpcomingCalendarTasksExpanded,
+		  onExpansionChanged: (expanded) {
+			setState(() {
+			  _isUpcomingCalendarTasksExpanded = expanded;
+			});
+		  },
+		  events: upcomingEvents,
+		  isPastCategory: false,
+		),
+		
+		const SizedBox(height: 8),
+		
+		// Past Events Subcategory
+		_buildCalendarSubcategory(
+		  title: 'Past Events',
+		  count: pastEvents.length,
+		  icon: Icons.event_busy,
+		  color: Colors.grey,
+		  isExpanded: _isPastCalendarTasksExpanded,
+		  onExpansionChanged: (expanded) {
+			setState(() {
+			  _isPastCalendarTasksExpanded = expanded;
+			});
+		  },
+		  events: pastEvents,
+		  isPastCategory: true,
+		),
+	  ];
+	}
+
+	// Add this new method to build individual calendar subcategories:
+	Widget _buildCalendarSubcategory({
+	  required String title,
+	  required int count,
+	  required IconData icon,
+	  required Color color,
+	  required bool isExpanded,
+	  required ValueChanged<bool> onExpansionChanged,
+	  required List<CalendarEvent> events,
+	  required bool isPastCategory,
+	}) {
+	  return Container(
+		margin: const EdgeInsets.symmetric(horizontal: 8),
+		decoration: BoxDecoration(
+		  color: Colors.grey.shade50,
+		  borderRadius: BorderRadius.circular(8),
+		  border: Border.all(color: Colors.grey.shade200),
+		),
+		child: Column(
+		  children: [
+			// Subcategory header
+			Material(
+			  color: Colors.transparent,
+			  child: InkWell(
+				borderRadius: BorderRadius.circular(8),
+				onTap: () => onExpansionChanged(!isExpanded),
+				child: Padding(
+				  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+				  child: Row(
+					children: [
+					  Container(
+						padding: const EdgeInsets.all(6),
+						decoration: BoxDecoration(
+						  color: color.withOpacity(0.1),
+						  shape: BoxShape.circle,
+						),
+						child: Icon(icon, color: color, size: 18),
+					  ),
+					  const SizedBox(width: 12),
+					  Expanded(
+						child: Text(
+						  title,
+						  style: const TextStyle(
+							fontSize: 14,
+							fontWeight: FontWeight.w500,
+						  ),
+						),
+					  ),
+					  Container(
+						padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+						decoration: BoxDecoration(
+						  color: color.withOpacity(0.1),
+						  borderRadius: BorderRadius.circular(10),
+						),
+						child: Text(
+						  count.toString(),
+						  style: TextStyle(
+							color: color,
+							fontWeight: FontWeight.bold,
+							fontSize: 11,
+						  ),
+						),
+					  ),
+					  const SizedBox(width: 8),
+					  AnimatedRotation(
+						turns: isExpanded ? 0.5 : 0.0,
+						duration: const Duration(milliseconds: 200),
+						child: Icon(
+						  Icons.expand_more,
+						  color: Colors.grey.shade500,
+						  size: 18,
+						),
+					  ),
+					],
+				  ),
+				),
+			  ),
+			),
+			
+			// Subcategory content
+			AnimatedContainer(
+			  duration: const Duration(milliseconds: 300),
+			  curve: Curves.easeInOut,
+			  height: isExpanded ? null : 0,
+			  child: isExpanded
+				  ? Padding(
+					  padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+					  child: events.isEmpty
+						  ? Padding(
+							  padding: const EdgeInsets.all(12),
+							  child: Text(
+								'No $title',
+								style: TextStyle(
+								  color: Colors.grey.shade500,
+								  fontSize: 12,
+								),
+								textAlign: TextAlign.center,
+							  ),
+							)
+						  : Column(
+							  children: events.map((event) => 
+								_buildCalendarTaskCard(event, forceStyle: isPastCategory ? 'past' : 'upcoming')
+							  ).toList(),
+							),
+					)
+				  : const SizedBox.shrink(),
 			),
 		  ],
 		),
