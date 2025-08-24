@@ -111,6 +111,8 @@ class _HomeMapScreenState extends State<HomeMapScreen>
   bool _isNorthLocked = false;
   
   bool _isFabMenuOpen = false;
+  
+  Set<OSMMarker> _originalMarkersBackup = {}; // Backup for restoring markers after search
 
   @override
   void initState() {
@@ -1546,24 +1548,24 @@ class _HomeMapScreenState extends State<HomeMapScreen>
 			await _loadSavedLocationsAndFocusNew(); // Will use cache first
 		  }
 		},
-      onTap: (ll.LatLng location) {
-        // Clear search results when tapping on map
-        if (_osmSearchMarkers.isNotEmpty) {
-          setState(() {
-            _osmSearchMarkers.clear();
-          });
-          _updateMapWithSearchResults();
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Search results cleared'),
-              backgroundColor: Colors.blue,
-              duration: Duration(seconds: 2),
-            ),
-          );
-        } else {
-          _centerCameraOnLocation(location);
-        }
-      },
+		onTap: (ll.LatLng location) async {
+		  // Clear search results when tapping on map
+		  if (_osmSearchMarkers.isNotEmpty) {
+			setState(() {
+			  _osmSearchMarkers.clear();
+			});
+			await _restoreOriginalMarkers();
+			ScaffoldMessenger.of(context).showSnackBar(
+			  const SnackBar(
+				content: Text('Search results cleared'),
+				backgroundColor: Colors.blue,
+				duration: Duration(seconds: 2),
+			  ),
+			);
+		  } else {
+			_centerCameraOnLocation(location);
+		  }
+		},
     );
   }
 
@@ -2138,6 +2140,16 @@ class _HomeMapScreenState extends State<HomeMapScreen>
     
     print('🔍 UPDATE MARKERS: OSM - State updated');
   }
+  
+  // Restore original markers when search is cleared
+	Future<void> _restoreOriginalMarkers() async {
+	  if (_originalMarkersBackup.isNotEmpty) {
+		setState(() {
+		  _osmMarkers = Set.from(_originalMarkersBackup);
+		  _originalMarkersBackup = {};
+		});
+	  }
+	}
 
   // OSM: Focus on task location
   Future<void> focusOnTaskLocation(TaskLocation task) async {
@@ -2379,6 +2391,14 @@ class _HomeMapScreenState extends State<HomeMapScreen>
   Future<void> _processDistanceAndCreateMarkers(List rawResults, ll.LatLng searchCenter, String searchTerm) async {
     // Calculate distance for each result and create enriched list
     List<Map<String, dynamic>> resultsWithDistance = [];
+	
+	// Backup original markers and show only search results
+	if (_osmMarkers.isNotEmpty) {
+	  _originalMarkersBackup = Set.from(_osmMarkers);
+	  setState(() {
+		_osmMarkers = {}; // Clear existing markers during search
+	  });
+	}
     
     for (int i = 0; i < rawResults.length; i++) {
       final place = rawResults[i];
@@ -2469,10 +2489,20 @@ class _HomeMapScreenState extends State<HomeMapScreen>
 
     await _updateMapWithSearchResults();
 
-    if (_osmMapController != null && closestResults.isNotEmpty) {
-      _osmMapController!.move(searchCenter, 14);
-      print('🔍 OSM SEARCH DEBUG: Moved map to search center with zoom 14');
-    }
+	// Smart camera positioning based on search results
+	if (_osmMapController != null && closestResults.isNotEmpty) {
+	  if (closestResults.length == 1) {
+		// Single result: zoom to exact location with high zoom
+		final singleResult = closestResults.first;
+		_osmMapController!.move(ll.LatLng(singleResult['lat'], singleResult['lng']), 17.0);
+		print('🔍 OSM SEARCH DEBUG: Moved to single result with zoom 17');
+	  } else {
+		// Multiple results: zoom to closest result with medium zoom
+		final closestResult = closestResults.first;
+		_osmMapController!.move(ll.LatLng(closestResult['lat'], closestResult['lng']), 15.0);
+		print('🔍 OSM SEARCH DEBUG: Moved to closest of ${closestResults.length} results with zoom 15');
+	  }
+	}
 
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
