@@ -2624,179 +2624,180 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
     );
   }
 
-  Widget _buildSearchBar() {
-    return Container(
-      padding: EdgeInsets.only(
-        top: MediaQuery.of(context).padding.top + 8,
-        left: 16,
-        right: 16,
-        bottom: 8,
-      ),
-      decoration: BoxDecoration(
-        color: Theme.of(context).scaffoldBackgroundColor,
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black12,
-            blurRadius: 4,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
-      child: Column(
-        children: [
-          // Search input row
-          Row(
-            children: [
-              Expanded(
-                child: TextField(
-                  controller: _searchController,
-                  focusNode: _searchFocusNode,
-                  decoration: InputDecoration(
-                    hintText: 'Search places (Hofer, pharmacy, restaurant...)',
-                    prefixIcon: const Icon(Icons.search, size: 20),
-                    suffixIcon: _searchController.text.isNotEmpty
-                        ? IconButton(
-                      icon: const Icon(Icons.clear, size: 20),
-                      onPressed: () {
-                        _searchController.clear();
-                        setState(() {
-                          _suggestions.clear();
-                          _showSuggestions = false;
-                        });
-                      },
-                    )
-                        : null,
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(12),
-                      borderSide: BorderSide.none,
-                    ),
-                    filled: true,
-                    fillColor: Theme.of(context).cardColor,
-                    contentPadding: const EdgeInsets.symmetric(
-                      horizontal: 16,
-                      vertical: 12,
-                    ),
-                  ),
-                  onSubmitted: (_) => _performSearch(),
-                ),
-              ),
-              if (_searchController.text.isNotEmpty) ...[
-                const SizedBox(width: 8),
-                Container(
-                  height: 48,
-                  child: ElevatedButton(
-                    onPressed: _isSearching ? null : _performSearch,
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.teal,
-                      foregroundColor: Colors.white,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                    ),
-                    child: _isSearching
-                        ? const SizedBox(
-                      width: 16,
-                      height: 16,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        color: Colors.white,
-                      ),
-                    )
-                        : const Icon(Icons.search),
-                  ),
-                ),
-              ],
-            ],
-          ),
+	Widget _buildSearchBar() {
+	  return Container(
+		padding: EdgeInsets.only(
+		  top: MediaQuery.of(context).padding.top + 8,
+		  left: 16,
+		  right: 16,
+		  bottom: 8,
+		),
+		decoration: BoxDecoration(
+		  color: Colors.teal, // Changed from Theme.of(context).scaffoldBackgroundColor to teal
+		  boxShadow: [
+			BoxShadow(
+			  color: Colors.black12,
+			  blurRadius: 4,
+			  offset: const Offset(0, 2),
+			),
+		  ],
+		),
+		child: Column(
+		  children: [
+			// Search input row
+			Row(
+			  children: [
+				Expanded(
+				  child: TextField(
+					controller: _searchController,
+					focusNode: _searchFocusNode,
+					decoration: InputDecoration(
+					  hintText: 'Search places (Hofer, pharmacy, restaurant...)',
+					  hintStyle: TextStyle(color: Colors.grey.shade600), // Make hint text visible on white background
+					  prefixIcon: const Icon(Icons.search, size: 20, color: Colors.grey),
+					  suffixIcon: _searchController.text.isNotEmpty
+						  ? IconButton(
+						icon: const Icon(Icons.clear, size: 20, color: Colors.grey),
+						onPressed: () {
+						  _searchController.clear();
+						  setState(() {
+							_suggestions.clear();
+							_showSuggestions = false;
+						  });
+						},
+					  )
+						  : null,
+					  border: OutlineInputBorder(
+						borderRadius: BorderRadius.circular(12),
+						borderSide: BorderSide.none,
+					  ),
+					  filled: true,
+					  fillColor: Colors.white, // Keep search field white for contrast
+					  contentPadding: const EdgeInsets.symmetric(
+						horizontal: 16,
+						vertical: 12,
+					  ),
+					),
+					onSubmitted: (_) => _performSearch(),
+				  ),
+				),
+				if (_searchController.text.isNotEmpty) ...[
+				  const SizedBox(width: 8),
+				  Container(
+					height: 48,
+					child: ElevatedButton(
+					  onPressed: _isSearching ? null : _performSearch,
+					  style: ElevatedButton.styleFrom(
+						backgroundColor: Colors.white, // White button on teal background
+						foregroundColor: Colors.teal, // Teal text/icon
+						shape: RoundedRectangleBorder(
+						  borderRadius: BorderRadius.circular(12),
+						),
+					  ),
+					  child: _isSearching
+						  ? const SizedBox(
+						width: 16,
+						height: 16,
+						child: CircularProgressIndicator(
+						  strokeWidth: 2,
+						  color: Colors.teal,
+						),
+					  )
+						  : const Icon(Icons.search),
+					),
+				  ),
+				],
+			  ],
+			),
 
-          // Autocomplete suggestions dropdown
-          if (_showSuggestions) ...[
-            const SizedBox(height: 8),
-            Container(
-              constraints: const BoxConstraints(maxHeight: 200),
-              decoration: BoxDecoration(
-                color: Theme.of(context).cardColor,
-                borderRadius: BorderRadius.circular(12),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black12,
-                    blurRadius: 8,
-                    offset: const Offset(0, 4),
-                  ),
-                ],
-              ),
-              child: _isLoadingSuggestions
-                  ? const Padding(
-                padding: EdgeInsets.all(16),
-                child: Center(
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      SizedBox(
-                        width: 16,
-                        height: 16,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      ),
-                      SizedBox(width: 8),
-                      Text('Searching...'),
-                    ],
-                  ),
-                ),
-              )
-                  : _suggestions.isEmpty
-                  ? const Padding(
-                padding: EdgeInsets.all(16),
-                child: Center(
-                  child: Text(
-                    'No suggestions found',
-                    style: TextStyle(color: Colors.grey),
-                  ),
-                ),
-              )
-                  : ListView.separated(
-                shrinkWrap: true,
-                padding: const EdgeInsets.all(8),
-                itemCount: _suggestions.length,
-                separatorBuilder: (context, index) => const Divider(
-                  height: 1,
-                  color: Color(0xFFE0E0E0),
-                ),
-                itemBuilder: (context, index) {
-                  final suggestion = _suggestions[index];
-                  return ListTile(
-                    dense: true,
-                    leading: const Icon(
-                      Icons.location_on,
-                      color: Color(0xFF4DB6AC),
-                      size: 20,
-                    ),
-                    title: Text(
-                      suggestion.mainText,
-                      style: const TextStyle(fontWeight: FontWeight.w500),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    subtitle: suggestion.secondaryText != null
-                        ? Text(
-                      suggestion.secondaryText!,
-                      style: const TextStyle(
-                        color: Color(0xFF757575),
-                        fontSize: 12,
-                      ),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    )
-                        : null,
-                    onTap: () => _onSuggestionSelected(suggestion),
-                  );
-                },
-              ),
-            ),
-          ],
-        ],
-      ),
-    );
-  }
+			// Autocomplete suggestions dropdown
+			if (_showSuggestions) ...[
+			  const SizedBox(height: 8),
+			  Container(
+				constraints: const BoxConstraints(maxHeight: 200),
+				decoration: BoxDecoration(
+				  color: Colors.white, // Keep suggestions dropdown white
+				  borderRadius: BorderRadius.circular(12),
+				  boxShadow: [
+					BoxShadow(
+					  color: Colors.black12,
+					  blurRadius: 8,
+					  offset: const Offset(0, 4),
+					),
+				  ],
+				),
+				child: _isLoadingSuggestions
+					? const Padding(
+				  padding: EdgeInsets.all(16),
+				  child: Center(
+					child: Row(
+					  mainAxisSize: MainAxisSize.min,
+					  children: [
+						SizedBox(
+						  width: 16,
+						  height: 16,
+						  child: CircularProgressIndicator(strokeWidth: 2),
+						),
+						SizedBox(width: 8),
+						Text('Searching...'),
+					  ],
+					),
+				  ),
+				)
+					: _suggestions.isEmpty
+					? const Padding(
+				  padding: EdgeInsets.all(16),
+				  child: Center(
+					child: Text(
+					  'No suggestions found',
+					  style: TextStyle(color: Colors.grey),
+					),
+				  ),
+				)
+					: ListView.separated(
+				  shrinkWrap: true,
+				  padding: const EdgeInsets.all(8),
+				  itemCount: _suggestions.length,
+				  separatorBuilder: (context, index) => const Divider(
+					height: 1,
+					color: Color(0xFFE0E0E0),
+				  ),
+				  itemBuilder: (context, index) {
+					final suggestion = _suggestions[index];
+					return ListTile(
+					  dense: true,
+					  leading: const Icon(
+						Icons.location_on,
+						color: Color(0xFF4DB6AC),
+						size: 20,
+					  ),
+					  title: Text(
+						suggestion.mainText,
+						style: const TextStyle(fontWeight: FontWeight.w500),
+						maxLines: 1,
+						overflow: TextOverflow.ellipsis,
+					  ),
+					  subtitle: suggestion.secondaryText != null
+						  ? Text(
+						suggestion.secondaryText!,
+						style: const TextStyle(
+						  color: Color(0xFF757575),
+						  fontSize: 12,
+						),
+						maxLines: 1,
+						overflow: TextOverflow.ellipsis,
+					  )
+						  : null,
+					  onTap: () => _onSuggestionSelected(suggestion),
+					);
+				  },
+				),
+			  ),
+			],
+		  ],
+		),
+	  );
+	}
 
 	void _performSearch() {
 	  final searchTerm = _searchController.text.trim();
