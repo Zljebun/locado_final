@@ -18,6 +18,7 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:locado_final/models/calendar_event.dart';
 import 'dart:developer' as developer;
+import '../services/task_location_cache.dart';
 
 // Enum for map provider selection
 enum MapProvider { googleMaps, openStreetMap }
@@ -619,6 +620,10 @@ class _TaskInputScreenState extends State<TaskInputScreen> {
       final taskId = await DatabaseHelper.instance.addTaskLocation(taskLocation);
       taskLocation = taskLocation.copyWith(id: taskId);
       debugPrint('Task saved to database: ${taskLocation.title}');
+	  
+	  // 1.a Update cache immediately
+		await TaskLocationCache.instance.addTaskToCache(taskLocation);
+		debugPrint('Task added to cache: ${taskLocation.title}');
 
       // 2. Create calendar event if scheduled
       if (scheduledDateTime != null) {

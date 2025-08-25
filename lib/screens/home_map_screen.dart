@@ -260,18 +260,6 @@ class _HomeMapScreenState extends State<HomeMapScreen>
 	  newMarkers.add(currentLocationMarker);
 	}
 
-    // Location markers - simple blue dots
-    for (var location in locations) {
-      newMarkers.add(
-        OSMMarker(
-          markerId: 'location_${location.id}',
-          position: ll.LatLng(location.latitude!, location.longitude!),
-          title: location.description ?? 'No Description',
-          child: _createSimpleMarker(Colors.blue, Icons.place),
-        ),
-      );
-    }
-
     // Task markers - simple colored dots (no custom Canvas rendering)
     for (var task in taskLocations) {
 	 // Skip tasks without location
@@ -781,10 +769,14 @@ class _HomeMapScreenState extends State<HomeMapScreen>
 
     if (result != null) {
       if (result == true) {
-        await _loadSavedLocationsWithRefresh();
+        await loadSavedLocationsWithRefresh();
+		// Force immediate UI refresh to show markers
+		setState(() {
+		  _isLoading = false;
+		});
       } else if (result is Map) {
         if (result['refresh'] == true) {
-          await _loadSavedLocationsWithRefresh();
+          await loadSavedLocationsWithRefresh();
           if (result['focusLocation'] != null) {
             // SIMPLIFIED: Convert Google LatLng to OSM LatLng if needed
             final focusLocation = result['focusLocation'];
@@ -1274,9 +1266,9 @@ class _HomeMapScreenState extends State<HomeMapScreen>
 
       if (result != null) {
         if (result == true) {
-          await _loadSavedLocationsWithRefresh();
+          await loadSavedLocationsWithRefresh();
         } else if (result is Map && result['refresh'] == true) {
-          await _loadSavedLocationsWithRefresh();
+          await loadSavedLocationsWithRefresh();
           if (result['focusLocation'] != null) {
             // Convert from Google Maps LatLng to OSM LatLng
             final focusLocation = result['focusLocation'];
@@ -1546,6 +1538,11 @@ class _HomeMapScreenState extends State<HomeMapScreen>
 		  );
 		  if (result == true) {
 			await _loadSavedLocationsAndFocusNew(); // Will use cache first
+			
+			// Force immediate UI refresh
+			setState(() {
+			  _isLoading = false;
+			});
 		  }
 		},
 		onTap: (ll.LatLng location) async {
@@ -1627,38 +1624,53 @@ class _HomeMapScreenState extends State<HomeMapScreen>
 	  }
 	}
 
-  // Create OSM markers with better styling
-  Future<void> _createOSMMarkersWithCustomStyling(List<Location> locations, List<TaskLocation> taskLocations) async {
-    Set<OSMMarker> newMarkers = {};
+	// Create OSM markers with better styling
+	Future<void> _createOSMMarkersWithCustomStyling(List<Location> locations, List<TaskLocation> taskLocations) async {
+	  Set<OSMMarker> newMarkers = {};
 
-    // Location markers
-    for (var location in locations) {
-      newMarkers.add(
-        OSMMarker(
-          markerId: 'location_${location.id}',
-          position: ll.LatLng(location.latitude!, location.longitude!),
-          title: location.description ?? 'No Description',
-          child: _createStyledMarker(Colors.blue, Icons.place, isLarge: false),
-        ),
-      );
-    }
+	  // Keep current location marker if it exists
+	  final currentLocationMarker = _osmMarkers.where((marker) => marker.markerId == 'current_location').firstOrNull;
+	  if (currentLocationMarker != null) {
+		newMarkers.add(currentLocationMarker);
+	  }
 
-    // Task markers with colors
-	for (var location in locations) {
-	  newMarkers.add(
-		OSMMarker(
-		  markerId: 'location_${location.id}',
-		  position: ll.LatLng(location.latitude!, location.longitude!), 
-		  title: location.description ?? 'No Description',
-		  child: _createStyledMarker(Colors.blue, Icons.place, isLarge: false),
-		),
-	  );
+	  // Location markers
+	  for (var location in locations) {
+		newMarkers.add(
+		  OSMMarker(
+			markerId: 'location_${location.id}',
+			position: ll.LatLng(location.latitude!, location.longitude!),
+			title: location.description ?? 'No Description',
+			child: _createStyledMarker(Colors.blue, Icons.place, isLarge: false),
+		  ),
+		);
+	  }
+
+	  // Task markers with colors (FIXED)
+	  for (var task in taskLocations) {
+		// Skip tasks without location
+		if (!task.hasLocation) continue;
+		
+		final color = Color(int.parse(task.colorHex.replaceFirst('#', '0xff')));
+		
+		newMarkers.add(
+		  OSMMarker(
+			markerId: 'task_${task.id}',
+			position: ll.LatLng(task.latitude!, task.longitude!),
+			title: task.title,
+			child: _createStyledMarker(color, Icons.location_on, isLarge: false),
+			onTap: () => _handleTaskTap(task),
+		  ),
+		);
+	  }
+
+	  // Add existing search markers
+	  newMarkers.addAll(_osmSearchMarkers);
+
+	  setState(() {
+		_osmMarkers = newMarkers;
+	  });
 	}
-
-    setState(() {
-      _osmMarkers = newMarkers;
-    });
-  }
 
   // Create styled marker (better than simple markers)
   Widget _createStyledMarker(Color color, IconData icon, {bool isLarge = false}) {
@@ -1805,9 +1817,9 @@ class _HomeMapScreenState extends State<HomeMapScreen>
   }
 
   // OSM: Load saved locations with refresh
-	Future<void> _loadSavedLocationsWithRefresh() async {
+	Future<void> loadSavedLocationsWithRefresh() async {
 	  try {
-		print('🔄 MAP CACHE: _loadSavedLocationsWithRefresh() called');
+		print('🔄 MAP CACHE: loadSavedLocationsWithRefresh() called');
 		
 		// ✅ OPTIMIZED: Load locations and use cache for tasks first
 		final locationsFuture = DatabaseHelper.instance.getAllLocations();
@@ -1816,17 +1828,21 @@ class _HomeMapScreenState extends State<HomeMapScreen>
 		final cachedTasks = await TaskLocationCache.instance.getInstantTasks();
 		final locations = await locationsFuture;
 		
-		if (cachedTasks.isNotEmpty) {
-		  // Use cached data for immediate UI update
-		  _savedLocations = cachedTasks;
-		  await _createOSMMarkersWithCustomStyling(locations, cachedTasks);
-		  
-		  setState(() {
-			_isLoading = false;
-		  });
-		  
-		  print('✅ MAP CACHE: Updated UI with cached data (${cachedTasks.length} tasks)');
-		}
+		// Always load fresh data from database when returning from TaskInputScreen
+		print('🔄 MAP CACHE: Loading fresh data from database...');
+		final freshTasks = await DatabaseHelper.instance.getAllTaskLocations();
+
+		_savedLocations = freshTasks;
+		await _createOSMMarkersWithCustomStyling(locations, freshTasks);
+
+		// Update cache with fresh data
+		await TaskLocationCache.instance.updateCache(freshTasks);
+
+		setState(() {
+		  _isLoading = false;
+		});
+
+		print('✅ MAP CACHE: Updated UI with fresh data (${freshTasks.length} tasks)');
 		
 		// ✅ BACKGROUND: Refresh from database
 		Future.delayed(const Duration(milliseconds: 100), () async {
@@ -1870,7 +1886,7 @@ class _HomeMapScreenState extends State<HomeMapScreen>
 		});
 
 	  } catch (e) {
-		print('❌ MAP CACHE: Error in _loadSavedLocationsWithRefresh: $e');
+		print('❌ MAP CACHE: Error in loadSavedLocationsWithRefresh: $e');
 		setState(() {
 		  _isLoading = false;
 		});

@@ -2601,18 +2601,24 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
       // Floating Action Button (only show on map tab)
 		floatingActionButton: _currentIndex == 0 ? FloatingActionButton(
 		onPressed: () async {
-		  print('📄 FAB: FloatingActionButton pressed, opening TaskInputScreen directly...');
+		  print('FAB: FloatingActionButton pressed, opening TaskInputScreen directly...');
 		  
 		  final result = await Navigator.push(
 			context,
 			MaterialPageRoute(
-			  builder: (ctx) => const TaskInputScreen(), // No location parameter - let user choose
+			  builder: (ctx) => const TaskInputScreen(),
 			),
 		  );
 
 		  if (result == true) {
-			print('📄 FAB: Task created, reloading data...');
+			print('FAB: Task created, reloading data...');
 			await _loadTaskData();
+			
+			// Notify map screen to refresh immediately with fresh data
+			final mapState = _mapKey.currentState as dynamic;
+			if (mapState != null) {
+			  await mapState.loadSavedLocationsWithRefresh();
+			}
 		  }
 		},
 		  backgroundColor: Colors.teal,
